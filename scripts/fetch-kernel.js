@@ -109,13 +109,15 @@ const lock = path.join(kernelDir, 'package-lock.json');
 if (fs.existsSync(lock)) fs.rmSync(lock, { force: true });
 
 // 7. 打包为单文件归档（排除符号链接目录 .bin，避免跨平台解压问题）
-// 注意：必须使用相对路径（cwd 指向内核目录）。
-// Windows 自带 bsdtar 会把含盘符的绝对路径（如 D:\a\...）中的 "D:" 误判为
-// "远程主机:路径"（rsh 风格），报 "Cannot connect to D: resolve failed"。
+// 注意：必须使用相对路径，规避 Windows bsdtar 把 "D:\..." 盘符误判为
+// "远程主机:路径"（rsh 风格，报 "Cannot connect to D: resolve failed"）。
+// 归档输出到 ARCHIVE（vendor/kernel.tar.gz），与 electron-builder.yml 的
+// extraResources 引用路径保持一致。
 console.log('打包内核为单文件归档 kernel.tar.gz ...');
+const archiveRel = path.relative(kernelDir, ARCHIVE).replace(/\\/g, '/'); // "../kernel.tar.gz"
 const tar = run(
   tarCmd(),
-  ['-czf', 'kernel.tar.gz', '--exclude', 'node_modules/.bin', '.'],
+  ['-czf', archiveRel, '--exclude', 'node_modules/.bin', '.'],
   { silent: true, cwd: kernelDir }
 );
 if (tar.status !== 0) {
