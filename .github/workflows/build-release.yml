@@ -21,10 +21,10 @@ jobs:
         include:
           - name: windows
             os: windows-latest
-            run: npm run pack:win
+            platform: --win
           - name: macos
             os: macos-latest
-            run: npm run pack:mac
+            platform: --mac
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -40,9 +40,16 @@ jobs:
         run: npm ci
 
       # 打包（内部自动执行 fetch-kernel 预下载内置内核）
+      # --publish never：禁用 electron-builder 自动上传（需 GH_TOKEN），
+      # 产物统一由下方 release job 用 action-gh-release 上传
       - name: Build installer
         shell: bash
-        run: ${{ matrix.run }}
+        run: |
+          npm run fetch-kernel
+          npx electron-builder ${{ matrix.platform }} --publish never
+        env:
+          # 内核版本（如需固定可改，缺省 latest）
+          DSH_KERNEL_VERSION: latest
 
       # 收集产物
       - name: Upload artifacts
