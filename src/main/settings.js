@@ -22,6 +22,8 @@ const DEFAULTS = {
   dshPort: 3080,
   // dsh 启动参数（数组，如 ['web']）
   dshMode: 'web',
+  // 应用启动后自动运行 dsh（有内核时），使主页直接呈现工作台
+  autoStartDsh: true,
   // 上次检查更新时间（时间戳）
   lastCheckAt: null,
   // 上次更新完成时间（时间戳）

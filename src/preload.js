@@ -46,6 +46,11 @@ const api = {
   onUpdateInstallError: (cb) => ipcRenderer.on('update:install-error', (_e, msg) => cb(msg)),
   onAppUpdateAvailable: (cb) => ipcRenderer.on('app-update:available', (_e, info) => cb(info)),
   onDshLog: (cb) => ipcRenderer.on('dsh:log', (_e, line) => cb(line)),
+
+  // ---------- 内置内核导入进度 ----------
+  onKernelImportProgress: (cb) => ipcRenderer.on('kernel:import-progress', (_e, msg) => cb(msg)),
+  onKernelImportDone: (cb) => ipcRenderer.on('kernel:import-done', (_e, info) => cb(info)),
+  onKernelImportError: (cb) => ipcRenderer.on('kernel:import-error', (_e, msg) => cb(msg)),
 };
 
 contextBridge.exposeInMainWorld('dshClient', api);

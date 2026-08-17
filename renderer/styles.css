@@ -184,8 +184,34 @@ html, body {
 }
 .empty-icon { font-size: 44px; color: var(--text-muted); opacity: .5; }
 
-.workspace-frame { height: calc(100vh - 160px); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.workspace-frame { position: relative; height: calc(100vh - 160px); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .workspace-frame webview { width: 100%; height: 100%; }
+
+/* 工作台加载/失败遮罩 */
+.ws-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 14px;
+  text-align: center;
+  padding: 20px;
+}
+.ws-overlay.ws-error h3 { color: var(--text); margin-bottom: 4px; }
+.ws-spinner {
+  width: 36px; height: 36px;
+  border: 3px solid rgba(255,255,255,.12);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: ws-spin 0.9s linear infinite;
+}
+@keyframes ws-spin { to { transform: rotate(360deg); } }
 
 /* ============ 设置 ============ */
 .setting-row {

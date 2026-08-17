@@ -47,6 +47,9 @@ const els = {
   wsStart: $('#btn-ws-start'),
   wsStop: $('#btn-ws-stop'),
   wsReload: $('#btn-ws-reload'),
+  wsRetry: $('#btn-ws-retry'),
+  wsLoading: $('#ws-loading'),
+  wsFailed: $('#ws-failed'),
   workspaceEmpty: $('#workspace-empty'),
   workspaceFrame: $('#workspace-frame'),
   dshWebview: $('#dsh-webview'),
@@ -55,6 +58,7 @@ const els = {
   setAutoInstall: $('#set-auto-install'),
   setCheckInterval: $('#set-check-interval'),
   setUpdateChannel: $('#set-update-channel'),
+  setAutoStartDsh: $('#set-auto-start-dsh'),
   setDshMode: $('#set-dsh-mode'),
   setDshPort: $('#set-dsh-port'),
   btnSaveSettings: $('#btn-save-settings'),
@@ -139,7 +143,8 @@ async function refreshStatus() {
     const channel = (s.settings && s.settings.updateChannel) || 'latest';
     els.channelTip.textContent = '更新通道：' + channel + (channel === 'stable' ? '（仅正式版）' : '（含 RC）');
     if (s.bundledKernel && s.bundledKernel.bundled) {
-      els.bundledKernelInfo.textContent = '安装包内置内核 v' + (s.bundledKernel.version || '?') + '（首次启动自动导入）';
+      const imported = s.kernel.installed ? '（已导入）' : '（首次启动自动导入）';
+      els.bundledKernelInfo.textContent = '安装包内置内核 v' + (s.bundledKernel.version || '?') + imported;
     } else {
       els.bundledKernelInfo.textContent = '';
     }
@@ -204,7 +209,8 @@ function applySettingsToForm() {
   els.setAutoCheck.checked = !!currentSettings.autoCheckUpdate;
   els.setAutoInstall.checked = !!currentSettings.autoInstall;
   els.setCheckInterval.value = currentSettings.checkIntervalMinutes || 60;
-  els.setUpdateChannel.value = currentSettings.updateChannel || 'latest';
+  els.  setUpdateChannel.value = currentSettings.updateChannel || 'latest';
+  els.setAutoStartDsh.checked = !!currentSettings.autoStartDsh;
   els.setDshMode.value = currentSettings.dshMode || 'web';
   els.setDshPort.value = currentSettings.dshPort || 3080;
   els.setAppUpdateRepo.value = currentSettings.appUpdateRepo || '';
@@ -285,17 +291,18 @@ async function handleRollback() {
 // ---------- dsh 控制 ----------
 async function handleStartDsh() {
   els.btnStartDsh.disabled = true;
+  els.wsStart.disabled = true;
+  setWsOverlay('loading');
   try {
     await api.startDsh({ mode: (currentSettings && currentSettings.dshMode) || 'web', port: (currentSettings && currentSettings.dshPort) || 3080 });
     await refreshStatus();
-    if (els.dshWebview) {
-      setTimeout(() => {
-        els.dshWebview.src = 'http://127.0.0.1:' + ((currentSettings && currentSettings.dshPort) || 3080);
-      }, 800);
-    }
+    // 服务启动后加载工作台
+    setTimeout(loadWsUrl, 800);
   } catch (err) {
     showToast('error', '启动 dsh 失败：' + err.message);
+    setWsOverlay('failed');
     els.btnStartDsh.disabled = false;
+    els.wsStart.disabled = false;
   }
 }
 
@@ -308,11 +315,28 @@ async function handleStopDsh() {
   }
 }
 
+/**
+ * 工作台遮罩状态
+ * @param {'loading'|'failed'|'none'} state
+ */
+function setWsOverlay(state) {
+  els.wsLoading.classList.toggle('hidden', state !== 'loading');
+  els.wsFailed.classList.toggle('hidden', state !== 'failed');
+}
+
+function loadWsUrl() {
+  if (!els.dshWebview) return;
+  setWsOverlay('loading');
+  els.dshWebview.src = 'http://127.0.0.1:' + ((currentSettings && currentSettings.dshPort) || 3080);
+}
+
 function showWorkspace(active) {
   els.workspaceEmpty.classList.toggle('hidden', active);
   els.workspaceFrame.classList.toggle('hidden', !active);
-  if (active && els.dshWebview) {
-    els.dshWebview.src = 'http://127.0.0.1:' + ((currentSettings && currentSettings.dshPort) || 3080);
+  if (active) {
+    loadWsUrl();
+  } else {
+    setWsOverlay('none');
   }
 }
 
@@ -323,6 +347,7 @@ async function handleSaveSettings() {
     autoInstall: els.setAutoInstall.checked,
     checkIntervalMinutes: Math.max(10, parseInt(els.setCheckInterval.value, 10) || 60),
     updateChannel: els.setUpdateChannel.value,
+    autoStartDsh: els.setAutoStartDsh.checked,
     dshMode: els.setDshMode.value,
     dshPort: parseInt(els.setDshPort.value, 10) || 3080,
     appUpdateRepo: els.setAppUpdateRepo.value.trim(),
@@ -443,12 +468,8 @@ function switchView(name) {
   els.navItems.forEach((n) => n.classList.toggle('active', n.dataset.view === name));
   els.views.forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
   if (name === 'logs') refreshLogs();
-  if (name === 'workspace' && els.dshWebview) {
-    // 确保 webview 显示正确页面
-    const port = (currentSettings && currentSettings.dshPort) || 3080;
-    if (els.workspaceFrame.classList.contains('hidden') === false) {
-      els.dshWebview.src = 'http://127.0.0.1:' + port;
-    }
+  if (name === 'workspace' && !els.workspaceFrame.classList.contains('hidden')) {
+    loadWsUrl();
   }
 }
 
@@ -466,17 +487,24 @@ function bindEvents() {
   els.wsStart.addEventListener('click', handleStartDsh);
   els.wsStop.addEventListener('click', handleStopDsh);
   els.wsReload.addEventListener('click', () => {
-    if (els.dshWebview) {
-      els.dshWebview.src = 'about:blank';
-      setTimeout(() => {
-        els.dshWebview.src = 'http://127.0.0.1:' + ((currentSettings && currentSettings.dshPort) || 3080);
-      }, 200);
-    }
+    setWsOverlay('loading');
+    loadWsUrl();
   });
 
   els.btnOpenNodeDownload.addEventListener('click', () => api.openNodeDownload());
   els.btnSaveSettings.addEventListener('click', handleSaveSettings);
   els.btnRemoveKernel.addEventListener('click', handleRemoveKernel);
+
+  // 工作台 webview 加载状态
+  if (els.dshWebview) {
+    els.dshWebview.addEventListener('did-start-loading', () => setWsOverlay('loading'));
+    els.dshWebview.addEventListener('did-stop-loading', () => setWsOverlay('none'));
+    els.dshWebview.addEventListener('did-fail-load', (e) => {
+      // ERR_ABORTED (-3) 是导航中断（如刷新），忽略
+      if (e.errorCode !== -3) setWsOverlay('failed');
+    });
+  }
+  els.wsRetry.addEventListener('click', loadWsUrl);
 
   els.btnCheckAppUpdate.addEventListener('click', handleCheckAppUpdate);
   els.btnDownloadAppUpdate.addEventListener('click', handleDownloadAppUpdate);
@@ -521,6 +549,20 @@ function bindEvents() {
     setAppUpdateResult('ok',
       '发现客户端新版本：v' + info.latest + '（当前 v' + info.current + '）。' +
       '可前往"设置 → 程序更新"查看并下载。');
+  });
+
+  // 内置内核导入进度（首次启动）
+  api.onKernelImportProgress((msg) => {
+    els.bundledKernelInfo.textContent = msg;
+  });
+  api.onKernelImportDone((info) => {
+    els.bundledKernelInfo.textContent = '安装包内置内核 v' + (info.version || '?') + '（已导入）';
+    showToast('info', '内置内核 v' + (info.version || '?') + ' 导入完成，可直接使用。');
+    refreshStatus();
+  });
+  api.onKernelImportError((msg) => {
+    showToast('error', '内置内核导入失败：' + msg + ' 可点击"更新内核"在线安装。');
+    refreshStatus();
   });
 }
 

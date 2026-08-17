@@ -20,10 +20,10 @@
       </div>
 
       <nav class="nav">
-        <button class="nav-item active" data-view="overview">
+        <button class="nav-item" data-view="overview">
           <span class="nav-icon">▦</span>总览
         </button>
-        <button class="nav-item" data-view="workspace">
+        <button class="nav-item active" data-view="workspace">
           <span class="nav-icon">◫</span>dsh 工作台
         </button>
         <button class="nav-item" data-view="settings">
@@ -45,10 +45,10 @@
     <!-- 主内容区 -->
     <main class="main">
       <!-- ===== 总览 ===== -->
-      <section class="view active" id="view-overview">
+      <section class="view" id="view-overview">
         <header class="view-header">
           <h2>总览</h2>
-          <p>DeepSeek Harness 内核与运行环境状态</p>
+          <p>DeepSeek Harness 内核与运行状态</p>
         </header>
 
         <!-- 内核状态卡片 -->
@@ -88,30 +88,6 @@
           <div class="update-toast hidden" id="update-toast"></div>
         </div>
 
-        <!-- Node.js 环境 -->
-        <div class="card">
-          <div class="card-header">
-            <div>
-              <h3>Node.js 运行环境</h3>
-              <p class="muted">dsh 内核依赖 Node.js v18+（推荐 v24）</p>
-            </div>
-            <div class="version-badge" id="node-badge">检测中</div>
-          </div>
-          <div class="env-grid">
-            <div class="env-item">
-              <label>Node.js</label>
-              <span id="node-version">—</span>
-            </div>
-            <div class="env-item">
-              <label>npm</label>
-              <span id="npm-version">—</span>
-            </div>
-          </div>
-          <div class="card-actions">
-            <button class="btn" id="btn-open-node-download" hidden>前往 Node.js 官网下载</button>
-          </div>
-        </div>
-
         <!-- dsh 进程 -->
         <div class="card">
           <div class="card-header">
@@ -139,8 +115,8 @@
         </div>
       </section>
 
-      <!-- ===== 工作台 ===== -->
-      <section class="view" id="view-workspace">
+      <!-- ===== 工作台（默认主页） ===== -->
+      <section class="view active" id="view-workspace">
         <header class="view-header workspace-header">
           <div>
             <h2>dsh 工作台</h2>
@@ -159,6 +135,16 @@
           <p class="muted small">首次使用请在 Web 界面中设置 API Key 并选择工作目录。</p>
         </div>
         <div class="workspace-frame hidden" id="workspace-frame">
+          <div class="ws-overlay" id="ws-loading">
+            <div class="ws-spinner"></div>
+            <p>正在加载 DeepSeek Harness 工作台…</p>
+          </div>
+          <div class="ws-overlay ws-error hidden" id="ws-failed">
+            <div class="empty-icon">⚠</div>
+            <h3>工作台加载失败</h3>
+            <p class="muted">无法连接到 dsh 服务，请检查服务是否已启动后重试。</p>
+            <button class="btn btn-primary" id="btn-ws-retry">重新加载</button>
+          </div>
           <webview id="dsh-webview" src="about:blank" allowpopups></webview>
         </div>
       </section>
@@ -255,7 +241,41 @@
         </div>
 
         <div class="card">
+          <h3>运行环境</h3>
+          <div class="card-header">
+            <div>
+              <p class="muted">dsh 内核依赖 Node.js v18+（推荐 v24）</p>
+            </div>
+            <div class="version-badge" id="node-badge">检测中</div>
+          </div>
+          <div class="env-grid">
+            <div class="env-item">
+              <label>Node.js</label>
+              <span id="node-version">—</span>
+            </div>
+            <div class="env-item">
+              <label>npm</label>
+              <span id="npm-version">—</span>
+            </div>
+          </div>
+          <div class="card-actions">
+            <button class="btn" id="btn-open-node-download" hidden>前往 Node.js 官网下载</button>
+          </div>
+        </div>
+
+        <div class="card">
           <h3>dsh 运行设置</h3>
+          <div class="setting-row">
+            <div>
+              <label class="setting-label">启动时自动运行 dsh</label>
+              <p class="muted">应用打开后自动启动 dsh 服务，主页直接呈现工作台</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="set-auto-start-dsh" />
+              <span class="slider"></span>
+            </label>
+          </div>
+
           <div class="setting-row">
             <div>
               <label class="setting-label">启动模式</label>

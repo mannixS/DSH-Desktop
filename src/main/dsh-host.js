@@ -6,9 +6,12 @@
  *
  * 通过系统 Node 运行内核中的 dsh CLI（lib/bin.js），
  * 以 DSH_HOME 环境变量隔离 dsh 数据目录到客户端 userData 下。
+ *
+ * 停止时保证整棵进程树被终止（Windows: taskkill /T /F；macOS/Linux: 进程组 kill），
+ * 确保应用退出后 dsh 及其 worker 不会残留。
  */
 
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -92,6 +95,8 @@ class DshHost {
         windowsHide: true,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
+        // macOS/Linux 下让 dsh 进入独立进程组，便于整树终止
+        detached: process.platform !== 'win32',
       });
     } catch (err) {
       this.logger.error(`启动失败: ${err.message}`);
@@ -135,59 +140,84 @@ class DshHost {
   }
 
   /**
-   * 停止 dsh 进程
+   * 停止 dsh 进程（含整棵进程树）
    * @param {object} [options]
-   * @param {boolean} [options.force=false] 强制结束
+   * @param {boolean} [options.force=false] 强制结束（跳过优雅退出）
+   * @param {number} [options.timeout=4000] 等待进程退出的超时（ms）
+   * @returns {Promise<{ ok: boolean, alreadyStopped?: boolean }>}
    */
-  stop({ force = false } = {}) {
+  stop({ force = false, timeout = 4000 } = {}) {
     if (!this.child) {
       this.running = false;
-      return { ok: true, alreadyStopped: true };
+      return Promise.resolve({ ok: true, alreadyStopped: true });
     }
     this.stopping = true;
+    const pid = this.child.pid;
+
+    return new Promise((resolve) => {
+      const done = () => {
+        this.running = false;
+        this.child = null;
+        resolve({ ok: true });
+      };
+
+      // 进程已自然退出
+      if (this.child.exitCode !== null || this.child.signalCode !== null) {
+        done();
+        return;
+      }
+
+      const killTimer = setTimeout(() => {
+        this.logger.warn('等待 dsh 退出超时，强制执行');
+        this._killTree(pid);
+        setTimeout(done, 500);
+      }, timeout);
+
+      this.child.once('exit', () => {
+        clearTimeout(killTimer);
+        done();
+      });
+
+      // 先优雅退出，超时后再整树强制终止
+      this._killTree(pid, { force });
+      if (!force && process.platform !== 'win32') {
+        // 非 Windows：先 SIGTERM 整个进程组，给 dsh 优雅退出机会
+        try {
+          process.kill(-pid, 'SIGTERM');
+        } catch {}
+      }
+      if (force || process.platform === 'win32') {
+        // 立即强制整树终止（Windows SIGTERM 语义不可靠）
+        setTimeout(() => this._killTree(pid, { force: true }), 500);
+      }
+    });
+  }
+
+  /**
+   * 终止整棵进程树
+   * - Windows: taskkill /pid <pid> /T /F（含子进程）
+   * - macOS/Linux: 向进程组发送信号（负 pid）
+   */
+  _killTree(pid, { force = true } = {}) {
     try {
-      if (force) {
-        this.child.kill('SIGKILL');
+      if (process.platform === 'win32') {
+        const flags = force ? '/T /F' : '/T';
+        exec(`taskkill /pid ${pid} ${flags}`, { windowsHide: true }, () => {});
       } else {
-        // 先发 SIGTERM，等待退出
-        this.child.kill('SIGTERM');
+        process.kill(-pid, force ? 'SIGKILL' : 'SIGTERM');
       }
     } catch (err) {
-      this.logger.warn(`停止 dsh 失败: ${err.message}`);
+      // 进程可能已退出（ESRCH），忽略
+      if (err.code !== 'ESRCH') {
+        this.logger.warn(`终止 dsh 进程树失败: ${err.message}`);
+      }
     }
-    // Windows 下 SIGTERM 可能无效，兜底强制结束
-    if (process.platform === 'win32') {
-      setTimeout(() => {
-        if (this.child) {
-          try {
-            this.child.kill();
-          } catch {}
-        }
-      }, 2000);
-    }
-    return { ok: true };
   }
 
   /** 重启 dsh */
-  restart(options) {
-    this.stop({ force: true });
-    // 等待进程完全退出后重新启动
-    return new Promise((resolve) => {
-      const waitExit = setInterval(() => {
-        if (!this.running && !this.child) {
-          clearInterval(waitExit);
-          const result = this.start(options);
-          resolve(result);
-        }
-      }, 200);
-      setTimeout(() => {
-        clearInterval(waitExit);
-        if (!this.running && !this.child) {
-          const result = this.start(options);
-          resolve(result);
-        }
-      }, 3000);
-    });
+  async restart(options) {
+    await this.stop({ force: true });
+    return this.start(options);
   }
 
   get status() {

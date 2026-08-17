@@ -198,9 +198,16 @@ class KernelManager {
    * 将内置内核导入用户数据目录（首次启动时调用）
    * 仅当用户目录中尚未安装内核时执行；复制完成后校验可运行。
    * @param {string|null} [bundledKernelDir] 内置内核目录（默认 process.resourcesPath/kernel）
+   * @param {object} [options]
+   * @param {function(string):void} [options.onProgress] 进度回调
    * @returns {Promise<{ imported: boolean, version: string|null, reason?: string, error?: string }>}
    */
-  async importBundledKernel(bundledKernelDir) {
+  async importBundledKernel(bundledKernelDir, { onProgress } = {}) {
+    const progress = (msg) => {
+      this.logger.info(msg);
+      if (typeof onProgress === 'function') onProgress(msg);
+    };
+
     const bundled = await this.getBundledKernelInfo(bundledKernelDir);
     if (!bundled.bundled || !bundled.dir) {
       return { imported: false, reason: 'no-bundled-kernel' };
@@ -215,10 +222,10 @@ class KernelManager {
       return { imported: false, reason: 'already-installed', version: local.version };
     }
 
-    this.logger.info(`导入内置内核 ${bundled.version} 到 ${this.kernelDir}`);
+    progress(`正在导入内置内核 v${bundled.version}...`);
     try {
       await fsp.mkdir(path.dirname(this.kernelDir), { recursive: true });
-      await fsp.cp(bundled.dir, this.kernelDir, { recursive: true, errorOnExist: false });
+      await this._copyRecursive(bundled.dir, this.kernelDir, progress);
     } catch (err) {
       this.logger.error(`导入内置内核失败: ${err.message}`);
       // 复制失败时清理半成品
@@ -233,7 +240,54 @@ class KernelManager {
       return { imported: false, error: '内置内核校验失败' };
     }
 
+    progress(`内置内核 v${bundled.version} 导入完成`);
     return { imported: true, version: bundled.version };
+  }
+
+  /**
+   * 稳健的递归目录复制：
+   * - 跳过符号链接 / junction（避免 Windows 上 .bin 链接导致复制失败或死循环）
+   * - 通过回调上报进度（每 500 个文件）
+   * @param {string} src 源目录
+   * @param {string} dest 目标目录
+   * @param {function(string):void} [onProgress]
+   */
+  async _copyRecursive(src, dest, onProgress) {
+    let count = 0;
+    const tick = () => {
+      count++;
+      if (count % 500 === 0 && typeof onProgress === 'function') {
+        onProgress(`正在导入内置内核...（已复制 ${count} 个文件）`);
+      }
+    };
+
+    async function walk(from, to) {
+      await fsp.mkdir(to, { recursive: true });
+      const entries = await fsp.readdir(from, { withFileTypes: true });
+      for (const entry of entries) {
+        const srcPath = path.join(from, entry.name);
+        const destPath = path.join(to, entry.name);
+        try {
+          if (entry.isSymbolicLink()) {
+            // 跳过符号链接（如 node_modules/.bin 中的 junction/链接）
+            continue;
+          }
+          if (entry.isDirectory()) {
+            await walk(srcPath, destPath);
+          } else if (entry.isFile()) {
+            await fsp.copyFile(srcPath, destPath);
+            tick();
+          } else {
+            // 其他类型（socket 等）跳过
+          }
+        } catch (err) {
+          // 单文件失败不影响整体，记录并继续
+          console.warn(`[kernel] 跳过复制 ${srcPath}: ${err.message}`);
+        }
+      }
+    }
+
+    await walk(src, dest);
   }
 
   // ---------------------------------------------------------------

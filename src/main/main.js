@@ -168,6 +168,12 @@ function bootstrap() {
   }
 
   // ---------------- 内置内核导入（首次启动） ----------------
+  function notifyRenderer(channel, payload) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, payload);
+    }
+  }
+
   async function ensureBundledKernel() {
     try {
       const bundled = await kernelManager.getBundledKernelInfo();
@@ -175,11 +181,15 @@ function bootstrap() {
         pushLog('[kernel]', '未发现安装包内置内核（开发模式或未预下载），可手动点击"更新内核"安装。');
         return;
       }
-      const result = await kernelManager.importBundledKernel();
+      const result = await kernelManager.importBundledKernel(undefined, {
+        onProgress: (msg) => notifyRenderer('kernel:import-progress', msg),
+      });
       if (result.imported) {
         pushLog('[kernel]', `已导入安装包内置内核 v${result.version}，可直接使用。`);
+        notifyRenderer('kernel:import-done', { version: result.version });
       } else if (result.error) {
         pushLog('[kernel]', `内置内核导入失败: ${result.error}`);
+        notifyRenderer('kernel:import-error', result.error);
       } else if (result.reason === 'already-installed') {
         pushLog('[kernel]', `用户目录已有内核 v${result.version}，跳过内置导入。`);
       }
@@ -197,7 +207,7 @@ function bootstrap() {
       appVersion: app.getVersion(),
       kernel: local,
       kernelRunnable: local.installed ? await kernelManager.isKernelRunnable() : false,
-      bundledKernel: bundled,
+      bundledKernel: { bundled: bundled.bundled, version: bundled.version },
       nodeEnv: env,
       dsh: dshHost.status,
       settings: settings.data,
@@ -252,7 +262,7 @@ function bootstrap() {
     });
 
     ipcMain.handle('dsh:stop', async () => {
-      dshHost.stop();
+      await dshHost.stop();
       return { ok: true, status: dshHost.status };
     });
 
@@ -321,6 +331,16 @@ function bootstrap() {
     // 首次启动：导入安装包内置内核（若无网络也可直接使用）
     await ensureBundledKernel();
 
+    // 应用启动后自动运行 dsh（若启用了 autoStartDsh 且内核可用），
+    // 使默认主页（工作台）直接呈现 DSH 界面
+    if (settings.get('autoStartDsh')) {
+      const local = await kernelManager.getLocalKernelInfo();
+      if (local.installed && !dshHost.running) {
+        pushLog('[dsh]', '应用启动，自动运行 dsh 服务...');
+        dshHost.start({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
+      }
+    }
+
     // 首次启动自动检查内核更新
     scheduleAutoCheck();
     setTimeout(runAutoCheck, 2500);
@@ -343,11 +363,23 @@ function bootstrap() {
     }
   });
 
-  app.on('before-quit', () => {
-    if (updateTimer) clearInterval(updateTimer);
-    if (dshHost.running) {
-      dshHost.stop({ force: true });
+  // 应用退出时同步关闭内核（含子进程树），避免 dsh 残留
+  let quitting = false;
+  app.on('before-quit', (event) => {
+    if (quitting) return;
+    if (!dshHost.running) {
+      if (updateTimer) clearInterval(updateTimer);
+      return;
     }
+    // 阻止默认退出，等待 dsh 完全停止后再退出
+    event.preventDefault();
+    quitting = true;
+    if (updateTimer) clearInterval(updateTimer);
+    pushLog('[app]', '应用退出中，正在关闭 dsh 内核...');
+    dshHost.stop({ force: true }).then(() => {
+      pushLog('[app]', 'dsh 内核已关闭，应用退出。');
+      app.exit(0);
+    });
   });
 
   app.on('activate', () => {
