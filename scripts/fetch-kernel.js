@@ -29,7 +29,7 @@ function run(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, {
     encoding: 'utf8',
     shell: process.platform === 'win32',
-    cwd: root,
+    cwd: opts.cwd || root,
     stdio: opts.silent ? 'pipe' : 'inherit',
   });
   return r;
@@ -109,11 +109,14 @@ const lock = path.join(kernelDir, 'package-lock.json');
 if (fs.existsSync(lock)) fs.rmSync(lock, { force: true });
 
 // 7. 打包为单文件归档（排除符号链接目录 .bin，避免跨平台解压问题）
+// 注意：必须使用相对路径（cwd 指向内核目录）。
+// Windows 自带 bsdtar 会把含盘符的绝对路径（如 D:\a\...）中的 "D:" 误判为
+// "远程主机:路径"（rsh 风格），报 "Cannot connect to D: resolve failed"。
 console.log('打包内核为单文件归档 kernel.tar.gz ...');
 const tar = run(
   tarCmd(),
-  ['-czf', ARCHIVE, '-C', kernelDir, '--exclude', 'node_modules/.bin', '.'],
-  { silent: true }
+  ['-czf', 'kernel.tar.gz', '--exclude', 'node_modules/.bin', '.'],
+  { silent: true, cwd: kernelDir }
 );
 if (tar.status !== 0) {
   console.error('✗ 内核归档打包失败:');

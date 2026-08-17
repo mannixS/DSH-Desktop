@@ -284,8 +284,11 @@ class KernelManager {
   _extractArchive(archive, dest) {
     return new Promise((resolve, reject) => {
       const tarCmd = process.platform === 'win32' ? 'tar.exe' : 'tar';
-      // -xzf：bsdtar 与 GNU tar 均支持；--exclude 排除可能存在的 Windows 垃圾文件
-      const child = spawn(tarCmd, ['-xzf', archive, '-C', dest], {
+      // 规避 Windows bsdtar 把 "C:\..." 盘符路径误判为远程主机的问题：
+      // 以 dest 为 cwd，归档路径改为相对路径（无盘符、无冒号）
+      const archiveRel = path.relative(dest, archive).replace(/\\/g, '/');
+      const child = spawn(tarCmd, ['-xzf', archiveRel], {
+        cwd: dest,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
