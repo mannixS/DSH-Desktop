@@ -1,0 +1,356 @@
+'use strict';
+
+/**
+ * main.js
+ * Electron 主进程入口：窗口创建、IPC 路由、内核管理与 dsh 托管编排
+ */
+
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const { KernelManager } = require('./kernel-manager');
+const { DshHost } = require('./dsh-host');
+const { Settings } = require('./settings');
+const { AppUpdater } = require('./app-updater');
+
+// 防止应用被再次实例化后继续跑（单实例）
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  bootstrap();
+}
+
+function bootstrap() {
+  // ---------------- 全局状态 ----------------
+  let mainWindow = null;
+  let updateTimer = null;
+  let checkingUpdate = false;
+  let installingUpdate = false;
+
+  // 各模块数据目录
+  const userData = app.getPath('userData');
+  const kernelDir = path.join(userData, 'kernel');
+  const dshHome = path.join(userData, 'dsh-home');
+
+  const settings = new Settings(path.join(userData, 'settings.json'));
+  const kernelManager = new KernelManager({ kernelDir, logger: makeLogger('[kernel]') });
+  const dshHost = new DshHost({
+    kernelDir,
+    dshHome,
+    port: 3080,
+    logger: makeLogger('[dsh]'),
+  });
+  const appUpdater = new AppUpdater({ settings, logger: makeLogger('[app-update]') });
+
+  // 推送日志给渲染进程（滚动保留最近 500 条）
+  const logBuffer = [];
+  function pushLog(tag, line) {
+    const entry = `[${new Date().toLocaleTimeString()}] ${tag} ${line}`;
+    logBuffer.push(entry);
+    if (logBuffer.length > 500) logBuffer.shift();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('dsh:log', entry);
+    }
+  }
+  dshHost.events.onLog = (line) => pushLog('', line);
+
+  function makeLogger(tag) {
+    return {
+      info: (...a) => pushLog(tag, a.join(' ')),
+      warn: (...a) => pushLog(tag, 'WARN ' + a.join(' ')),
+      error: (...a) => pushLog(tag, 'ERROR ' + a.join(' ')),
+    };
+  }
+
+  // ---------------- 窗口 ----------------
+  function createWindow() {
+    mainWindow = new BrowserWindow({
+      width: 1280,
+      height: 820,
+      minWidth: 960,
+      minHeight: 640,
+      title: 'DSH Desktop',
+      backgroundColor: '#0f1117',
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+        webviewTag: true,
+      },
+    });
+
+    mainWindow.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
+
+    // 外链交给系统浏览器
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      shell.openExternal(url);
+      return { action: 'deny' };
+    });
+
+    mainWindow.on('closed', () => {
+      mainWindow = null;
+    });
+  }
+
+  // ---------------- 自动更新逻辑 ----------------
+  async function runAutoCheck() {
+    if (checkingUpdate) return;
+    const enabled = settings.get('autoCheckUpdate');
+    if (!enabled) return;
+    checkingUpdate = true;
+    try {
+      const channel = settings.get('updateChannel');
+      const info = await kernelManager.checkForUpdates(channel);
+      await settings.update({ lastCheckAt: Date.now() });
+      if (info.hasUpdate && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:available', info);
+        // 自动安装（若开启）
+        if (settings.get('autoInstall')) {
+          startUpdateInstall();
+        }
+      }
+    } catch (err) {
+      pushLog('[update]', `检查更新失败: ${err.message}`);
+    } finally {
+      checkingUpdate = false;
+    }
+  }
+
+  function scheduleAutoCheck() {
+    if (updateTimer) clearInterval(updateTimer);
+    const minutes = Math.max(10, Number(settings.get('checkIntervalMinutes')) || 60);
+    updateTimer = setInterval(() => {
+      if (!checkingUpdate && !installingUpdate) runAutoCheck();
+    }, minutes * 60 * 1000);
+  }
+
+  async function startUpdateInstall() {
+    if (installingUpdate) return { ok: false, reason: 'installing' };
+    installingUpdate = true;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update:install-start');
+    }
+    try {
+      const channel = settings.get('updateChannel');
+      const info = await kernelManager.checkForUpdates(channel);
+      if (!info.hasUpdate) {
+        return { ok: false, reason: 'no-update' };
+      }
+      const remote = info.remote;
+      const result = await kernelManager.installKernel(remote, {
+        onProgress: (msg) => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('update:install-progress', msg);
+          }
+        },
+      });
+      await settings.update({ lastUpdateAt: Date.now() });
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:install-done', result);
+      }
+      // 若 dsh 正在运行，更新后自动重启以应用新内核
+      if (dshHost.running) {
+        pushLog('[update]', '检测到 dsh 正在运行，自动重启以应用新内核...');
+        await dshHost.restart({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
+      }
+      return { ok: true, version: result.version };
+    } catch (err) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:install-error', err.message);
+      }
+      pushLog('[update]', `安装更新失败: ${err.message}`);
+      return { ok: false, error: err.message };
+    } finally {
+      installingUpdate = false;
+    }
+  }
+
+  // ---------------- 内置内核导入（首次启动） ----------------
+  async function ensureBundledKernel() {
+    try {
+      const bundled = await kernelManager.getBundledKernelInfo();
+      if (!bundled.bundled) {
+        pushLog('[kernel]', '未发现安装包内置内核（开发模式或未预下载），可手动点击"更新内核"安装。');
+        return;
+      }
+      const result = await kernelManager.importBundledKernel();
+      if (result.imported) {
+        pushLog('[kernel]', `已导入安装包内置内核 v${result.version}，可直接使用。`);
+      } else if (result.error) {
+        pushLog('[kernel]', `内置内核导入失败: ${result.error}`);
+      } else if (result.reason === 'already-installed') {
+        pushLog('[kernel]', `用户目录已有内核 v${result.version}，跳过内置导入。`);
+      }
+    } catch (err) {
+      pushLog('[kernel]', `内置内核导入异常: ${err.message}`);
+    }
+  }
+
+  // ---------------- 状态快照 ----------------
+  async function getStatusSnapshot() {
+    const local = await kernelManager.getLocalKernelInfo();
+    const env = await kernelManager.detectNodeEnvironment();
+    const bundled = await kernelManager.getBundledKernelInfo();
+    return {
+      appVersion: app.getVersion(),
+      kernel: local,
+      kernelRunnable: local.installed ? await kernelManager.isKernelRunnable() : false,
+      bundledKernel: bundled,
+      nodeEnv: env,
+      dsh: dshHost.status,
+      settings: settings.data,
+    };
+  }
+
+  // ---------------- IPC ----------------
+  function registerIpc() {
+    ipcMain.handle('status:get', async () => {
+      return await getStatusSnapshot();
+    });
+
+    ipcMain.handle('update:check', async (_e, channel) => {
+      if (checkingUpdate) return { ok: false, reason: 'checking' };
+      checkingUpdate = true;
+      try {
+        const ch = channel || settings.get('updateChannel');
+        const info = await kernelManager.checkForUpdates(ch);
+        await settings.update({ lastCheckAt: Date.now() });
+        return { ok: true, ...info };
+      } catch (err) {
+        return { ok: false, error: err.message };
+      } finally {
+        checkingUpdate = false;
+      }
+    });
+
+    ipcMain.handle('update:install', async () => {
+      const result = await startUpdateInstall();
+      return result;
+    });
+
+    ipcMain.handle('update:rollback', async () => {
+      try {
+        const result = await kernelManager.rollbackKernel();
+        return { ok: true, ...result };
+      } catch (err) {
+        return { ok: false, error: err.message };
+      }
+    });
+
+    ipcMain.handle('kernel:install', async () => {
+      // 安装最新版内核（本地未安装时使用）
+      return await startUpdateInstall();
+    });
+
+    ipcMain.handle('dsh:start', async (_e, opts) => {
+      const mode = opts?.mode || settings.get('dshMode');
+      const port = opts?.port || settings.get('dshPort');
+      const result = dshHost.start({ mode, port });
+      return { ok: result.ok, status: dshHost.status, reason: result.reason };
+    });
+
+    ipcMain.handle('dsh:stop', async () => {
+      dshHost.stop();
+      return { ok: true, status: dshHost.status };
+    });
+
+    ipcMain.handle('dsh:restart', async (_e, opts) => {
+      const mode = opts?.mode || settings.get('dshMode');
+      const port = opts?.port || settings.get('dshPort');
+      const result = await dshHost.restart({ mode, port });
+      return { ok: result.ok, status: dshHost.status };
+    });
+
+    ipcMain.handle('settings:get', async () => settings.data);
+
+    ipcMain.handle('settings:update', async (_e, patch) => {
+      const updated = await settings.update(patch);
+      // 间隔变化时重排自动检查
+      if (patch.checkIntervalMinutes !== undefined) scheduleAutoCheck();
+      // 端口变化时若 dsh 在运行，提示重启
+      return updated;
+    });
+
+    ipcMain.handle('logs:get', async () => logBuffer);
+
+    ipcMain.handle('env:openNodeDownload', async () => {
+      shell.openExternal('https://nodejs.org/zh-cn/download');
+      return { ok: true };
+    });
+
+    ipcMain.handle('kernel:remove', async () => {
+      try {
+        await kernelManager.removeKernel();
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err.message };
+      }
+    });
+
+    // ---------- 客户端自身程序更新（预留） ----------
+    ipcMain.handle('app-update:check', async () => {
+      return await appUpdater.checkForUpdate();
+    });
+
+    ipcMain.handle('app-update:download', async (_e, url, filename) => {
+      return await appUpdater.downloadUpdate(url, filename);
+    });
+
+    ipcMain.handle('app-update:open-release', async (_e, url) => {
+      if (url) shell.openExternal(url);
+      return { ok: true };
+    });
+  }
+
+  // ---------------- 生命周期 ----------------
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+
+  app.whenReady().then(async () => {
+    await settings.load();
+    dshHost.port = settings.get('dshPort');
+    registerIpc();
+    createWindow();
+
+    // 首次启动：导入安装包内置内核（若无网络也可直接使用）
+    await ensureBundledKernel();
+
+    // 首次启动自动检查内核更新
+    scheduleAutoCheck();
+    setTimeout(runAutoCheck, 2500);
+
+    // 客户端自身程序更新检查（预留；未配置更新源时自动跳过）
+    if (settings.get('appAutoCheckUpdate')) {
+      setTimeout(async () => {
+        const info = await appUpdater.checkForUpdate();
+        if (info.configured && info.hasUpdate && mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('app-update:available', info);
+        }
+      }, 5000);
+    }
+  });
+
+  app.on('window-all-closed', () => {
+    // macOS 惯例：窗口关闭后保留在 Dock
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
+  });
+
+  app.on('before-quit', () => {
+    if (updateTimer) clearInterval(updateTimer);
+    if (dshHost.running) {
+      dshHost.stop({ force: true });
+    }
+  });
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+}

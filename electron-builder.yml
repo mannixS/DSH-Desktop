@@ -1,0 +1,62 @@
+# electron-builder 双平台打包配置
+appId: com.deepseek.dshdesktop
+productName: DSH Desktop
+copyright: Copyright © 2026 DeepSeek Harness Client Team
+
+directories:
+  output: dist
+  buildResources: resources
+
+files:
+  - src/**/*
+  - renderer/**/*
+  - package.json
+
+# 排除内核目录与开发依赖（内核在运行时按需安装到用户数据目录）
+asarUnpack:
+  - resources/**
+
+# 内置内核：打包前由 `npm run fetch-kernel` 下载到 vendor/kernel，
+# 安装后位于 process.resourcesPath/kernel，首启自动导入用户数据目录
+extraResources:
+  - from: vendor/kernel
+    to: kernel
+    filter:
+      - '**/*'
+      - '!**/package-lock.json'
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  shortcutName: DSH Desktop
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  notarize: false
+
+dmg:
+  title: ${productName} ${version}
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+npmRebuild: false

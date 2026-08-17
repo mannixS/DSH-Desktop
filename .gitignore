@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+.kernel/
+vendor/kernel/
+
+# Build output
+dist/
+out/
+build/
+
+# Logs
+*.log
+agent_log.md
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Env secrets
+.env
+.env.local

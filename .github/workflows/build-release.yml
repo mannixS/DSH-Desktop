@@ -1,0 +1,85 @@
+name: Build & Release
+
+# 触发方式：
+#   1. 推送 v 前缀 tag（如 v1.0.0）→ 构建双平台并创建 GitHub Release
+#   2. 手动触发（Actions 页面 Run workflow）→ 仅构建并上传 artifact，不创建 Release
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+            run: npm run pack:win
+          - name: macos
+            os: macos-latest
+            run: npm run pack:mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 打包（内部自动执行 fetch-kernel 预下载内置内核）
+      - name: Build installer
+        shell: bash
+        run: ${{ matrix.run }}
+
+      # 收集产物
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-desktop-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    # 仅在推送 tag 时创建 Release；手动触发只产出 artifact
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: DSH Desktop ${{ github.ref_name }}
+          body: |
+            ## DSH Desktop ${{ github.ref_name }}
+
+            DeepSeek Harness 跨平台桌面客户端，内置 dsh 内核，支持内核一键更新与回滚。
+
+            ### 安装包
+            - Windows x64：`DSH Desktop-*-win-x64.exe`
+            - macOS（Apple Silicon）：`DSH Desktop-*-mac-arm64.dmg`
+            - macOS（Intel）：`DSH Desktop-*-mac-x64.dmg`
+          files: dist/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
