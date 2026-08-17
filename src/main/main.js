@@ -45,6 +45,12 @@ function bootstrap() {
 
   // 推送日志给渲染进程（滚动保留最近 500 条）
   const logBuffer = [];
+  // 向渲染进程发送事件（窗口未就绪时安全忽略）
+  function notifyRenderer(channel, payload) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, payload);
+    }
+  }
   function pushLog(tag, line) {
     const entry = `[${new Date().toLocaleTimeString()}] ${tag} ${line}`;
     logBuffer.push(entry);
@@ -54,6 +60,12 @@ function bootstrap() {
     }
   }
   dshHost.events.onLog = (line) => pushLog('', line);
+  // dsh 进程状态变化（启动/就绪/退出）实时推送渲染层
+  dshHost.events.onStateChange = (status) => notifyRenderer('dsh:state', status);
+  dshHost.events.onReady = (port) => {
+    pushLog('[dsh]', `dsh Web UI 已就绪（端口 ${port}）`);
+    notifyRenderer('dsh:ready', { port });
+  };
 
   function makeLogger(tag) {
     return {
@@ -168,12 +180,6 @@ function bootstrap() {
   }
 
   // ---------------- 内置内核导入（首次启动） ----------------
-  function notifyRenderer(channel, payload) {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(channel, payload);
-    }
-  }
-
   async function ensureBundledKernel() {
     try {
       const bundled = await kernelManager.getBundledKernelInfo();
@@ -257,12 +263,16 @@ function bootstrap() {
     ipcMain.handle('dsh:start', async (_e, opts) => {
       const mode = opts?.mode || settings.get('dshMode');
       const port = opts?.port || settings.get('dshPort');
+      // 启动中状态实时推送给渲染层（进度提示）
+      notifyRenderer('dsh:start-progress', '正在启动 dsh 服务...');
       const result = dshHost.start({ mode, port });
       return { ok: result.ok, status: dshHost.status, reason: result.reason };
     });
 
     ipcMain.handle('dsh:stop', async () => {
+      notifyRenderer('dsh:stop-progress', '正在停止 dsh 服务...');
       await dshHost.stop();
+      notifyRenderer('dsh:stop-done', {});
       return { ok: true, status: dshHost.status };
     });
 

@@ -64,6 +64,8 @@ class DshHost {
       this.events.onError?.('内核未安装，请先安装 DeepSeek Harness 内核。');
       return { ok: false, reason: 'kernel-not-installed' };
     }
+    // 触发状态变化（启动中）
+    this.events.onStateChange?.(this.status);
 
     // dsh web 模式端口参数（部分版本支持 --port，失败时回退默认 3080）
     const cliArgs = [binPath];
@@ -106,6 +108,7 @@ class DshHost {
 
     this.running = true;
     this.stopping = false;
+    this._startPortProbe(portNum);
 
     this.child.stdout.on('data', (d) => {
       const lines = d.toString().split(/\r?\n/).filter(Boolean);
@@ -134,9 +137,43 @@ class DshHost {
       this.running = false;
       this.child = null;
       this.events.onExit?.(code);
+      this.events.onStateChange?.(this.status);
     });
 
     return { ok: true };
+  }
+
+  /**
+   * 端口探活：轮询 dsh Web 端口，探测到 HTTP 200 即触发 onReady
+   * （解决"进程已启动但 UI 尚未就绪"的状态脱节）
+   */
+  _startPortProbe(port, maxAttempts = 60, interval = 1000) {
+    let attempts = 0;
+    const probeTimer = setInterval(async () => {
+      // 进程已退出或已停止，终止探测
+      if (!this.running || this.stopping || !this.child) {
+        clearInterval(probeTimer);
+        return;
+      }
+      attempts++;
+      if (attempts > maxAttempts) {
+        clearInterval(probeTimer);
+        this.logger.warn(`端口探测超时（${maxAttempts * interval / 1000}s 未就绪）`);
+        return;
+      }
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        if (res.status >= 200 && res.status < 500) {
+          clearInterval(probeTimer);
+          this.logger.info(`dsh Web UI 就绪（端口 ${port}）`);
+          this.events.onReady?.(port);
+        }
+      } catch {
+        // 端口未就绪，继续探测
+      }
+    }, interval);
   }
 
   /**

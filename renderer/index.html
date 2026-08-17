@@ -1,333 +1,152 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" />
-  <title>DSH Desktop</title>
-  <link rel="stylesheet" href="styles.css" />
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
+<title>DSH Desktop</title>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app">
-    <!-- 侧边栏 -->
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-logo">DSH</div>
-        <div class="brand-text">
-          <h1>DSH Desktop</h1>
-          <p>DeepSeek Harness 客户端</p>
-        </div>
-      </div>
+<div class="app">
+  <!-- 全屏 dsh 工作台 -->
+  <main class="stage">
+    <div class="stage-empty" id="stage-empty">
+      <div class="empty-icon">&#9692;</div>
+      <h3>dsh 尚未启动</h3>
+      <p class="muted">点击下方状态栏的「启动」以打开 DeepSeek Harness 工作台。</p>
+    </div>
+    <div class="stage-overlay hidden" id="stage-loading">
+      <div class="ws-spinner"></div>
+      <p id="stage-loading-text">正在启动 dsh&#8230;</p>
+    </div>
+    <div class="stage-overlay ws-error hidden" id="stage-failed">
+      <div class="empty-icon">&#9888;</div>
+      <h3>dsh 启动失败</h3>
+      <p class="muted" id="stage-failed-text">请查看运行日志或检查内核状态。</p>
+      <div class="card-actions"><button class="btn btn-primary" id="btn-stage-retry">重试</button></div>
+    </div>
+    <div class="stage-frame hidden" id="stage-frame">
+      <webview id="dsh-webview" src="about:blank" allowpopups></webview>
+    </div>
+  </main>
 
-      <nav class="nav">
-        <button class="nav-item" data-view="overview">
-          <span class="nav-icon">▦</span>总览
-        </button>
-        <button class="nav-item active" data-view="workspace">
-          <span class="nav-icon">◫</span>dsh 工作台
-        </button>
-        <button class="nav-item" data-view="settings">
-          <span class="nav-icon">⚙</span>设置
-        </button>
-        <button class="nav-item" data-view="logs">
-          <span class="nav-icon">≡</span>运行日志
-        </button>
-      </nav>
+  <!-- 底部状态栏 -->
+  <footer class="statusbar">
+    <div class="statusbar-left">
+      <span class="dot" id="status-dot"></span>
+      <span class="status-text" id="status-text">正在加载&#8230;</span>
+    </div>
+    <div class="statusbar-center" id="status-extra"></div>
+    <div class="statusbar-right">
+      <span class="status-mini muted" id="status-version"></span>
+      <button class="btn btn-sm" id="btn-start-dsh">启动</button>
+      <button class="btn btn-sm" id="btn-stop-dsh" disabled>停止</button>
+      <button class="btn btn-sm" id="btn-open-settings">设置</button>
+    </div>
+  </footer>
+</div>
 
-      <div class="sidebar-footer">
-        <div class="side-status" id="side-status">
-          <span class="dot dot-gray"></span><span>正在加载…</span>
-        </div>
-        <p class="app-version">v<span id="app-version">-</span></p>
-      </div>
-    </aside>
-
-    <!-- 主内容区 -->
-    <main class="main">
-      <!-- ===== 总览 ===== -->
-      <section class="view" id="view-overview">
-        <header class="view-header">
-          <h2>总览</h2>
-          <p>DeepSeek Harness 内核与运行状态</p>
-        </header>
-
-        <!-- 内核状态卡片 -->
-        <div class="card">
-          <div class="card-header">
-            <div>
-              <h3>DeepSeek Harness 内核</h3>
-              <p class="muted" id="kernel-channel-tip">更新通道：latest</p>
-              <p class="muted small" id="bundled-kernel-info"></p>
-            </div>
-            <div class="version-badge" id="kernel-state-badge">未安装</div>
-          </div>
-
-          <div class="version-row">
-            <div class="version-box">
-              <label>当前版本</label>
-              <div class="version-big" id="local-version">—</div>
-              <div class="muted small" id="local-install-info"></div>
-            </div>
-            <div class="version-arrow">→</div>
-            <div class="version-box">
-              <label>最新版本</label>
-              <div class="version-big" id="remote-version">—</div>
-              <div class="muted small" id="remote-publish-info"></div>
-            </div>
-          </div>
-
-          <div class="card-actions">
-            <button class="btn btn-primary" id="btn-check-update">检查更新</button>
-            <button class="btn btn-accent" id="btn-install-update" disabled>更新内核</button>
-            <button class="btn" id="btn-rollback" disabled>回滚到上一版本</button>
-          </div>
-          <div class="update-progress hidden" id="update-progress">
-            <div class="progress-track"><div class="progress-bar" id="update-progress-bar"></div></div>
-            <p class="muted small" id="update-progress-text"></p>
-          </div>
-          <div class="update-toast hidden" id="update-toast"></div>
-        </div>
-
-        <!-- dsh 进程 -->
-        <div class="card">
-          <div class="card-header">
-            <div>
-              <h3>dsh 进程</h3>
-              <p class="muted">运行 dsh 服务并内嵌其 Web 界面</p>
-            </div>
-            <div class="version-badge" id="dsh-badge">未运行</div>
-          </div>
-          <div class="env-grid">
-            <div class="env-item">
-              <label>状态</label>
-              <span id="dsh-status-text">未运行</span>
-            </div>
-            <div class="env-item">
-              <label>端口</label>
-              <span id="dsh-port-text">3080</span>
-            </div>
-          </div>
-          <div class="card-actions">
-            <button class="btn btn-primary" id="btn-start-dsh">启动 dsh</button>
-            <button class="btn" id="btn-stop-dsh" disabled>停止 dsh</button>
-            <button class="btn" id="btn-open-workspace">前往工作台</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- ===== 工作台（默认主页） ===== -->
-      <section class="view active" id="view-workspace">
-        <header class="view-header workspace-header">
+<!-- 设置弹层 -->
+<div class="modal hidden" id="settings-modal">
+  <div class="modal-backdrop" id="settings-backdrop"></div>
+  <div class="modal-panel">
+    <header class="modal-header">
+      <h2>设置</h2>
+      <button class="btn btn-sm" id="btn-close-settings">关闭</button>
+    </header>
+    <div class="modal-body">
+      <section class="card">
+        <h3>内核更新</h3>
+        <div class="setting-row">
           <div>
-            <h2>dsh 工作台</h2>
-            <p class="muted">内嵌的 DeepSeek Harness Web 界面（127.0.0.1:3080）</p>
+            <label class="setting-label">当前版本</label>
+            <p class="muted" id="kernel-version-info">&#8212;</p>
           </div>
           <div class="card-actions">
-            <button class="btn btn-primary" id="btn-ws-start">启动 dsh</button>
-            <button class="btn" id="btn-ws-stop" disabled>停止</button>
-            <button class="btn" id="btn-ws-reload">刷新</button>
+            <button class="btn btn-sm" id="btn-check-update">检查更新</button>
+            <button class="btn btn-sm btn-accent" id="btn-install-update" disabled>更新内核</button>
           </div>
-        </header>
-        <div class="workspace-empty" id="workspace-empty">
-          <div class="empty-icon">◫</div>
-          <h3>dsh 尚未启动</h3>
-          <p class="muted">点击"启动 dsh"以在内嵌窗口中打开 DeepSeek Harness Web 界面。</p>
-          <p class="muted small">首次使用请在 Web 界面中设置 API Key 并选择工作目录。</p>
         </div>
-        <div class="workspace-frame hidden" id="workspace-frame">
-          <div class="ws-overlay" id="ws-loading">
-            <div class="ws-spinner"></div>
-            <p>正在加载 DeepSeek Harness 工作台…</p>
-          </div>
-          <div class="ws-overlay ws-error hidden" id="ws-failed">
-            <div class="empty-icon">⚠</div>
-            <h3>工作台加载失败</h3>
-            <p class="muted">无法连接到 dsh 服务，请检查服务是否已启动后重试。</p>
-            <button class="btn btn-primary" id="btn-ws-retry">重新加载</button>
-          </div>
-          <webview id="dsh-webview" src="about:blank" allowpopups></webview>
+        <div class="setting-row">
+          <div><label class="setting-label">自动检查更新</label><p class="muted">启动后自动检查并定时轮询</p></div>
+          <label class="switch"><input type="checkbox" id="set-auto-check"><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
+          <div><label class="setting-label">自动安装更新</label><p class="muted">检测到新版本自动下载安装</p></div>
+          <label class="switch"><input type="checkbox" id="set-auto-install"><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
+          <div><label class="setting-label">检查间隔（分钟）</label><p class="muted">最小 10 分钟</p></div>
+          <input type="number" class="input-number" id="set-check-interval" min="10" step="10" value="60">
+        </div>
+        <div class="setting-row">
+          <div><label class="setting-label">更新通道</label><p class="muted">latest 含 RC；stable 仅正式版</p></div>
+          <select class="input-select" id="set-update-channel">
+            <option value="latest">latest（含 RC）</option>
+            <option value="stable">stable（仅正式版）</option>
+          </select>
+        </div>
+        <div class="card-actions"><span class="muted small" id="update-toast"></span></div>
+      </section>
+
+      <section class="card">
+        <h3>dsh 运行</h3>
+        <div class="setting-row">
+          <div><label class="setting-label">启动时自动运行 dsh</label><p class="muted">应用打开后自动启动服务</p></div>
+          <label class="switch"><input type="checkbox" id="set-auto-start-dsh"><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
+          <div><label class="setting-label">Web UI 端口</label><p class="muted">本地服务端口（默认 3080）</p></div>
+          <input type="number" class="input-number" id="set-dsh-port" min="1024" max="65535" value="3080">
         </div>
       </section>
 
-      <!-- ===== 设置 ===== -->
-      <section class="view" id="view-settings">
-        <header class="view-header">
-          <h2>设置</h2>
-          <p>内核更新与运行配置</p>
-        </header>
-
-        <div class="card">
-          <h3>更新设置</h3>
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">自动检查更新</label>
-              <p class="muted">应用启动后自动检查，并定期轮询</p>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="set-auto-check" />
-              <span class="slider"></span>
-            </label>
-          </div>
-
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">自动安装更新</label>
-              <p class="muted">检测到新版本时自动下载安装（无需确认）</p>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="set-auto-install" />
-              <span class="slider"></span>
-            </label>
-          </div>
-
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">检查间隔（分钟）</label>
-              <p class="muted">自动检查更新的频率，最小 10 分钟</p>
-            </div>
-            <input type="number" class="input-number" id="set-check-interval" min="10" step="10" value="60" />
-          </div>
-
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">更新通道</label>
-              <p class="muted">latest 跟随 npm 最新版（可能为 RC）；stable 仅正式版</p>
-            </div>
-            <select class="input-select" id="set-update-channel">
-              <option value="latest">latest（跟随最新，含 RC）</option>
-              <option value="stable">stable（仅正式版）</option>
-            </select>
-          </div>
+      <section class="card">
+        <h3>运行环境</h3>
+        <div class="env-grid">
+          <div class="env-item"><label>Node.js</label><span id="node-version">&#8212;</span></div>
+          <div class="env-item"><label>npm</label><span id="npm-version">&#8212;</span></div>
         </div>
+        <div class="card-actions"><button class="btn btn-sm" id="btn-open-node-download" hidden>前往 Node.js 官网下载</button></div>
+      </section>
 
-        <div class="card">
-          <h3>程序更新（客户端自身）</h3>
-          <p class="muted small" style="margin-bottom: 12px;">
-            通过 GitHub Releases 或自定义 JSON 端点检查客户端新版本。当前版本 <span id="app-current-version">-</span>
-          </p>
-
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">GitHub 仓库（owner/repo）</label>
-              <p class="muted">如 your-name/dsh-desktop；填写后检查该仓库 latest release</p>
-            </div>
-            <input type="text" class="input-text" id="set-app-update-repo" placeholder="owner/repo" />
-          </div>
-
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">自定义更新源 URL（可选）</label>
-              <p class="muted">JSON：{ version, notes, assets: [{ name, url, platform }] }</p>
-            </div>
-            <input type="text" class="input-text" id="set-app-update-url" placeholder="https://example.com/update.json" />
-          </div>
-
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">启动后自动检查程序更新</label>
-              <p class="muted">发现新版本时在客户端内提示</p>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="set-app-auto-check" />
-              <span class="slider"></span>
-            </label>
-          </div>
-
-          <div class="card-actions" style="margin-top: 14px;">
-            <button class="btn btn-primary" id="btn-check-app-update">检查程序更新</button>
-            <button class="btn btn-accent" id="btn-download-app-update" disabled>下载新版本</button>
-          </div>
-          <div class="app-update-result" id="app-update-result"></div>
+      <section class="card">
+        <h3>程序更新（客户端）</h3>
+        <div class="setting-row">
+          <div><label class="setting-label">GitHub 仓库（owner/repo）</label><p class="muted">如 your-name/dsh-desktop</p></div>
+          <input type="text" class="input-text" id="set-app-update-repo" placeholder="owner/repo">
         </div>
-
-        <div class="card">
-          <h3>运行环境</h3>
-          <div class="card-header">
-            <div>
-              <p class="muted">dsh 内核依赖 Node.js v18+（推荐 v24）</p>
-            </div>
-            <div class="version-badge" id="node-badge">检测中</div>
-          </div>
-          <div class="env-grid">
-            <div class="env-item">
-              <label>Node.js</label>
-              <span id="node-version">—</span>
-            </div>
-            <div class="env-item">
-              <label>npm</label>
-              <span id="npm-version">—</span>
-            </div>
-          </div>
-          <div class="card-actions">
-            <button class="btn" id="btn-open-node-download" hidden>前往 Node.js 官网下载</button>
-          </div>
+        <div class="setting-row">
+          <div><label class="setting-label">自定义更新源 URL（可选）</label><p class="muted">JSON：{ version, notes, assets }</p></div>
+          <input type="text" class="input-text" id="set-app-update-url" placeholder="https://example.com/update.json">
         </div>
-
-        <div class="card">
-          <h3>dsh 运行设置</h3>
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">启动时自动运行 dsh</label>
-              <p class="muted">应用打开后自动启动 dsh 服务，主页直接呈现工作台</p>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="set-auto-start-dsh" />
-              <span class="slider"></span>
-            </label>
-          </div>
-
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">启动模式</label>
-              <p class="muted">web 为浏览器界面（默认）</p>
-            </div>
-            <select class="input-select" id="set-dsh-mode">
-              <option value="web">web（Web UI）</option>
-              <option value="tui">tui（终端界面）</option>
-            </select>
-          </div>
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">Web UI 端口</label>
-              <p class="muted">dsh 本地服务端口（默认 3080）</p>
-            </div>
-            <input type="number" class="input-number" id="set-dsh-port" min="1024" max="65535" value="3080" />
-          </div>
-          <div class="card-actions">
-            <button class="btn btn-primary" id="btn-save-settings">保存设置</button>
-            <span class="muted small" id="settings-save-tip"></span>
-          </div>
+        <div class="setting-row">
+          <div><label class="setting-label">启动后自动检查程序更新</label></div>
+          <label class="switch"><input type="checkbox" id="set-app-auto-check"><span class="slider"></span></label>
         </div>
+        <div class="card-actions">
+          <button class="btn btn-sm" id="btn-check-app-update">检查程序更新</button>
+          <button class="btn btn-sm btn-accent" id="btn-download-app-update" disabled>下载新版本</button>
+        </div>
+        <div class="app-update-result" id="app-update-result"></div>
+      </section>
 
-        <div class="card">
-          <h3>危险操作</h3>
-          <div class="setting-row">
-            <div>
-              <label class="setting-label">移除本地内核</label>
-              <p class="muted">删除已安装的 dsh 内核（含备份），可重新安装</p>
-            </div>
-            <button class="btn btn-danger" id="btn-remove-kernel">移除内核</button>
-          </div>
+      <section class="card">
+        <h3>危险操作</h3>
+        <div class="setting-row">
+          <div><label class="setting-label">移除本地内核</label><p class="muted">删除已安装内核（含备份），可重新安装</p></div>
+          <button class="btn btn-sm btn-danger" id="btn-remove-kernel">移除内核</button>
         </div>
       </section>
 
-      <!-- ===== 日志 ===== -->
-      <section class="view" id="view-logs">
-        <header class="view-header">
-          <h2>运行日志</h2>
-          <p>客户端与 dsh 进程输出</p>
-        </header>
-        <div class="card log-card">
-          <div class="log-toolbar">
-            <button class="btn" id="btn-clear-log">清空</button>
-            <button class="btn" id="btn-refresh-log">刷新</button>
-          </div>
-          <pre class="log-output" id="log-output">（暂无日志）</pre>
-        </div>
-      </section>
-    </main>
+      <div class="card-actions" style="justify-content:flex-end">
+        <button class="btn btn-primary" id="btn-save-settings">保存设置</button>
+        <span class="muted small" id="settings-save-tip"></span>
+      </div>
+    </div>
   </div>
+</div>
 
-  <script src="renderer.js"></script>
+<script src="renderer.js"></script>
 </body>
 </html>

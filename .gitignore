@@ -2,6 +2,7 @@
 node_modules/
 .kernel/
 vendor/kernel/
+vendor/kernel.tar.gz
 
 # Build output
 dist/

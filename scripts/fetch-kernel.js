@@ -2,9 +2,12 @@
 
 /**
  * fetch-kernel.js
- * 打包前预下载 dsh 内核到 vendor/kernel，供 electron-builder 以 extraResources
- * 打入安装包（process.resourcesPath/kernel）。用户安装客户端后首启即可使用，
- * 无需联网下载内核。
+ * 打包前预下载 dsh 内核到 vendor/kernel，并打包为单文件归档 vendor/kernel.tar.gz。
+ * electron-builder 将归档与版本信息打入安装包（process.resourcesPath/kernel）。
+ *
+ * 为什么用归档：内核含 3 万+ 小文件，若以裸目录打进安装包，NSIS 安装时要
+ * 逐个解压文件（加 Defender 扫描），安装极慢。归档为单文件后安装秒级完成，
+ * 首次启动时由客户端用系统 tar 快速解压导入。
  *
  * 用法：node scripts/fetch-kernel.js [version]
  *   - 省略 version 时安装 latest
@@ -18,6 +21,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const vendorDir = path.join(root, 'vendor');
 const kernelDir = path.join(vendorDir, 'kernel');
+const ARCHIVE = path.join(vendorDir, 'kernel.tar.gz');
 const DSH_PACKAGE = '@deepseek-ai/dsh';
 const INFO_FILE = path.join(kernelDir, 'bundle-info.json');
 
@@ -37,6 +41,11 @@ function nodeCmd() {
 
 function npmCmd() {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+}
+
+function tarCmd() {
+  // Windows 10 1803+ / macOS / Linux 均自带 tar（bsdtar 或 GNU tar）
+  return 'tar';
 }
 
 console.log('=== DSH Desktop 内置内核预下载 ===');
@@ -99,7 +108,22 @@ fs.writeFileSync(INFO_FILE, JSON.stringify(info, null, 2), 'utf8');
 const lock = path.join(kernelDir, 'package-lock.json');
 if (fs.existsSync(lock)) fs.rmSync(lock, { force: true });
 
+// 7. 打包为单文件归档（排除符号链接目录 .bin，避免跨平台解压问题）
+console.log('打包内核为单文件归档 kernel.tar.gz ...');
+const tar = run(
+  tarCmd(),
+  ['-czf', ARCHIVE, '-C', kernelDir, '--exclude', 'node_modules/.bin', '.'],
+  { silent: true }
+);
+if (tar.status !== 0) {
+  console.error('✗ 内核归档打包失败:');
+  console.error((tar.stderr || '').trim() || (tar.stdout || '').trim() || '未知错误');
+  process.exit(1);
+}
+
+const archiveSize = Math.round(fs.statSync(ARCHIVE).size / 1024 / 1024);
 console.log(`✓ 内置内核下载完成: ${DSH_PACKAGE}@${pkg.version}`);
-console.log(`  位置: vendor/kernel (${info.fetchedAt})`);
+console.log(`  归档: vendor/kernel.tar.gz (${archiveSize} MB)`);
+console.log(`  版本信息: vendor/kernel/bundle-info.json`);
 console.log('');
 console.log('执行 `npm run pack:win` 或 `npm run pack:mac` 即可将内核打包进安装包。');

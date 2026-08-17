@@ -51,6 +51,13 @@ const api = {
   onKernelImportProgress: (cb) => ipcRenderer.on('kernel:import-progress', (_e, msg) => cb(msg)),
   onKernelImportDone: (cb) => ipcRenderer.on('kernel:import-done', (_e, info) => cb(info)),
   onKernelImportError: (cb) => ipcRenderer.on('kernel:import-error', (_e, msg) => cb(msg)),
+
+  // ---------- dsh 进程状态（实时） ----------
+  onDshState: (cb) => ipcRenderer.on('dsh:state', (_e, status) => cb(status)),
+  onDshReady: (cb) => ipcRenderer.on('dsh:ready', (_e, info) => cb(info)),
+  onDshStartProgress: (cb) => ipcRenderer.on('dsh:start-progress', (_e, msg) => cb(msg)),
+  onDshStopProgress: (cb) => ipcRenderer.on('dsh:stop-progress', (_e, msg) => cb(msg)),
+  onDshStopDone: (cb) => ipcRenderer.on('dsh:stop-done', (_e, info) => cb(info)),
 };
 
 contextBridge.exposeInMainWorld('dshClient', api);

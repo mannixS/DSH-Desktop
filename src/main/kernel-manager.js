@@ -196,7 +196,12 @@ class KernelManager {
 
   /**
    * 将内置内核导入用户数据目录（首次启动时调用）
-   * 仅当用户目录中尚未安装内核时执行；复制完成后校验可运行。
+   * 仅当用户目录中尚未安装内核时执行；导入完成后校验可运行。
+   *
+   * 导入方式（按优先级）：
+   *  1. 内置内核为单文件归档（kernel.tar.gz，安装包默认形态）→ 系统 tar 解压
+   *  2. 内置内核为裸目录（开发模式 vendor/kernel 直接引用）→ 递归复制（回退）
+   *
    * @param {string|null} [bundledKernelDir] 内置内核目录（默认 process.resourcesPath/kernel）
    * @param {object} [options]
    * @param {function(string):void} [options.onProgress] 进度回调
@@ -222,13 +227,40 @@ class KernelManager {
       return { imported: false, reason: 'already-installed', version: local.version };
     }
 
+    const archivePath = path.join(bundled.dir, 'kernel.tar.gz');
+    const hasArchive = fs.existsSync(archivePath);
+    const hasSourceDir = fs.existsSync(path.join(bundled.dir, 'node_modules'));
+
+    if (!hasArchive && !hasSourceDir) {
+      return { imported: false, error: '内置内核资源缺失（既无归档也无源目录）' };
+    }
+
     progress(`正在导入内置内核 v${bundled.version}...`);
+
+    // 解压/复制到临时目录，校验通过后原子替换，避免中途失败留下半成品
+    const importTmp = `${this.kernelDir}.import`;
+    await this._rmrf(importTmp);
+    await this._rmrf(this.kernelDir);
+
     try {
-      await fsp.mkdir(path.dirname(this.kernelDir), { recursive: true });
-      await this._copyRecursive(bundled.dir, this.kernelDir, progress);
+      await fsp.mkdir(importTmp, { recursive: true });
+      if (hasArchive) {
+        progress('正在解压内置内核（单文件归档）...');
+        await this._extractArchive(archivePath, importTmp);
+        progress('内置内核解压完成，正在校验...');
+      } else {
+        await this._copyRecursive(bundled.dir, importTmp, progress);
+      }
+
+      // 校验临时目录中的内核可运行（入口文件存在）
+      const tmpBin = path.join(importTmp, 'node_modules', DSH_PACKAGE, 'lib', 'bin.js');
+      await fsp.access(tmpBin, fs.constants.R_OK);
+
+      // 原子替换：importTmp → kernelDir
+      await fsp.rename(importTmp, this.kernelDir);
     } catch (err) {
       this.logger.error(`导入内置内核失败: ${err.message}`);
-      // 复制失败时清理半成品
+      await this._rmrf(importTmp);
       await this._rmrf(this.kernelDir);
       return { imported: false, error: err.message };
     }
@@ -242,6 +274,32 @@ class KernelManager {
 
     progress(`内置内核 v${bundled.version} 导入完成`);
     return { imported: true, version: bundled.version };
+  }
+
+  /**
+   * 用系统 tar 解压归档到目标目录
+   * @param {string} archive 归档路径（.tar.gz）
+   * @param {string} dest 目标目录（已存在）
+   */
+  _extractArchive(archive, dest) {
+    return new Promise((resolve, reject) => {
+      const tarCmd = process.platform === 'win32' ? 'tar.exe' : 'tar';
+      // -xzf：bsdtar 与 GNU tar 均支持；--exclude 排除可能存在的 Windows 垃圾文件
+      const child = spawn(tarCmd, ['-xzf', archive, '-C', dest], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.on('data', (d) => (stderr += d.toString()));
+      child.on('error', (err) => reject(new Error(`无法启动 tar: ${err.message}`)));
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(stderr.trim() || `tar 解压退出码 ${code}`));
+        }
+      });
+    });
   }
 
   /**
