@@ -683,7 +683,7 @@ class KernelManager {
         '--no-audit',
         '--no-fund',
         '--no-update-notifier',
-        '--loglevel=error',
+        '--loglevel=notice',
         `${DSH_PACKAGE}@${version}`,
       ];
       this.logger.info(`执行: ${npmCmd} ${args.join(' ')}`);
@@ -695,18 +695,49 @@ class KernelManager {
       });
       let stdout = '';
       let stderr = '';
+      // 心跳：npm 下载大包时可能长时间无输出，定期提示"仍在下载"，避免用户误以为卡死
+      let lastProgress = Date.now();
+      const heartbeat = setInterval(() => {
+        if (Date.now() - lastProgress > 8000) {
+          lastProgress = Date.now();
+          if (typeof progress === 'function') progress('正在下载内核依赖…（大包下载可能需几分钟，请耐心等待）');
+        }
+      }, 8000);
+
+      const emitLine = (raw) => {
+        const text = (raw || '').trim();
+        if (!text) return;
+        // 解析 npm 进度关键行，转换为友好的进度提示
+        const m = text.match(/^(\d+)\/(\d+)/);
+        if (m) {
+          const pct = Math.round((parseInt(m[1], 10) / parseInt(m[2], 10)) * 100);
+          if (typeof progress === 'function') progress(`正在下载内核依赖… ${pct}%`);
+        } else if (/^added \d+ packages/.test(text)) {
+          if (typeof progress === 'function') progress(text);
+        } else if (/^up to date/.test(text)) {
+          if (typeof progress === 'function') progress(text);
+        } else if (/^npm notice/.test(text)) {
+          // 忽略 notice 行，避免刷屏
+        } else {
+          if (typeof progress === 'function') progress(text);
+        }
+        lastProgress = Date.now();
+      };
+
       child.stdout.on('data', (d) => {
         stdout += d.toString();
-        const text = d.toString().trim();
-        if (text) progress(text);
+        emitLine(d.toString());
       });
       child.stderr.on('data', (d) => {
         stderr += d.toString();
-        const text = d.toString().trim();
-        if (text) this.logger.warn(text);
+        emitLine(d.toString());
       });
-      child.on('error', (err) => reject(new Error(`无法启动 npm: ${err.message}`)));
+      child.on('error', (err) => {
+        clearInterval(heartbeat);
+        reject(new Error(`无法启动 npm: ${err.message}`));
+      });
       child.on('close', (code) => {
+        clearInterval(heartbeat);
         if (code === 0) {
           resolve();
         } else {

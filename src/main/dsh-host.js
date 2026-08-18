@@ -65,8 +65,9 @@ class DshHost {
    * @param {string} [options.mode='web'] 运行模式：web / tui / headless
    * @param {string[]} [options.args] 附加参数（headless 时传入任务描述）
    * @param {number} [options.port] 覆盖默认端口
+   * @returns {Promise<{ok: boolean, reason?: string}>}
    */
-  start({ mode = 'web', args = [], port } = {}) {
+  async start({ mode = 'web', args = [], port } = {}) {
     if (this.running) {
       this.logger.warn('dsh 已在运行，忽略重复启动');
       return { ok: false, reason: 'already-running' };
@@ -83,6 +84,18 @@ class DshHost {
     this.events.onStateChange?.(this.status);
 
     // dsh web 模式端口参数（部分版本支持 --port，失败时回退默认 3080）
+    // 端口占用预检：若端口被其他进程占用，提前提示（避免 dsh 启动后立即退出）
+    if (mode === 'web' && portNum) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${portNum}`, { signal: AbortSignal.timeout(1500) });
+        if (res.status >= 200 && res.status < 600) {
+          this.logger.warn(`端口 ${portNum} 已有服务响应（HTTP ${res.status}），可能是残留的 dsh 或端口被占用`);
+          // 不阻断，继续启动；dsh 会尝试绑定，若失败日志可见
+        }
+      } catch {
+        // 端口未响应，正常
+      }
+    }
     const cliArgs = [binPath];
     if (mode === 'web') {
       cliArgs.push('web');
@@ -162,6 +175,14 @@ class DshHost {
       this.child = null;
       this.events.onExit?.(code);
       this.events.onStateChange?.(this.status);
+      // 诊断：非主动停止的意外退出，推送详细原因到日志/界面
+      if (!this.stopping) {
+        const reason = code === 0
+          ? 'dsh 正常退出（可能因无任务/配置主动退出）'
+          : `dsh 异常退出（code=${code}, signal=${signal || '无'}）。请查看运行日志，常见原因：端口被占用、API Key 未配置、工作目录无效。`;
+        this.logger.warn(reason);
+        this.events.onUnexpectedExit?.({ code, signal, reason });
+      }
     });
 
     return { ok: true };
@@ -278,7 +299,7 @@ class DshHost {
   /** 重启 dsh */
   async restart(options) {
     await this.stop({ force: true });
-    return this.start(options);
+    return await this.start(options);
   }
 
   get status() {

@@ -117,8 +117,16 @@ class AppUpdater {
       return { configured: false, current: this.currentVersion };
     }
     try {
-      autoUpdater.checkForUpdates();
-      return { configured: true, current: this.currentVersion };
+      // await checkForUpdates：electron-updater 的 checkForUpdates() 返回 Promise，
+      // 不 await 会导致 UI 一直停留在"检查中"（事件可能已错过）
+      const result = await autoUpdater.checkForUpdates();
+      const info = result && result.updateInfo;
+      return {
+        configured: true,
+        current: this.currentVersion,
+        latest: info ? info.version : null,
+        updateAvailable: !!(info && info.version !== this.currentVersion),
+      };
     } catch (err) {
       this.logger.error('检查更新失败: ' + err.message);
       return { configured: true, current: this.currentVersion, error: err.message };

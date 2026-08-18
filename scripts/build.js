@@ -31,6 +31,7 @@ const jsFiles = [
   'renderer/renderer.js',
   'scripts/check-env.js',
   'scripts/fetch-kernel.js',
+  'scripts/fetch-node.js',
 ];
 let ok = true;
 for (const f of jsFiles) {

@@ -68,7 +68,34 @@ function bootstrap() {
   dshHost.events.onStateChange = (status) => notifyRenderer('dsh:state', status);
   dshHost.events.onReady = (port) => {
     pushLog('[dsh]', `dsh Web UI 已就绪（端口 ${port}）`);
+    restartCount = 0; // 成功就绪后重置重启计数
     notifyRenderer('dsh:ready', { port });
+  };
+  // dsh 意外退出自动重启（带退避，最多 3 次），避免"启动不起来"
+  let restartCount = 0;
+  let restartTimer = null;
+  dshHost.events.onUnexpectedExit = ({ code, signal, reason }) => {
+    pushLog('[dsh]', reason);
+    notifyRenderer('dsh:unexpected-exit', { code, signal, reason });
+    // 自动重启（除非用户主动停止或应用退出中）
+    if (settings.get('autoStartDsh') && !quitting && restartCount < 3) {
+      restartCount++;
+      const delay = Math.min(3000 * restartCount, 9000);
+      pushLog('[dsh]', `${delay / 1000}s 后自动重启 dsh（第 ${restartCount}/3 次）...`);
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(async () => {
+        if (!dshHost.running && !quitting) {
+          try {
+            await dshHost.start({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
+          } catch (err) {
+            pushLog('[dsh]', `自动重启 dsh 失败: ${err.message}`);
+          }
+        }
+      }, delay);
+    } else if (restartCount >= 3) {
+      pushLog('[dsh]', '自动重启次数已达上限，请查看运行日志排查问题。');
+      notifyRenderer('dsh:unexpected-exit', { code, signal, reason: '自动重启次数已达上限，请查看运行日志排查问题。' });
+    }
   };
 
   function makeLogger(tag) {
@@ -274,7 +301,7 @@ function bootstrap() {
       const port = opts?.port || settings.get('dshPort');
       // 启动中状态实时推送给渲染层（进度提示）
       notifyRenderer('dsh:start-progress', '正在启动 dsh 服务...');
-      const result = dshHost.start({ mode, port });
+      const result = await dshHost.start({ mode, port });
       return { ok: result.ok, status: dshHost.status, reason: result.reason };
     });
 
@@ -377,7 +404,11 @@ function bootstrap() {
         const local = await kernelManager.getLocalKernelInfo();
         if (local.installed && !dshHost.running) {
           pushLog('[dsh]', '应用启动，自动运行 dsh 服务...');
-          dshHost.start({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
+          try {
+            await dshHost.start({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
+          } catch (err) {
+            pushLog('[dsh]', '自动启动 dsh 失败: ' + err.message);
+          }
         }
       }
     })();

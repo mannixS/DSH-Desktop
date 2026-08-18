@@ -167,7 +167,8 @@ async function handleCheckAppUpdate() {
     lastAppUpdateInfo = info;
     if (!info.configured) setAppUpdateResult('', '未配置更新源，请填写 GitHub 仓库并保存。');
     else if (info.error) setAppUpdateResult('err', '检查失败：' + info.error);
-    else setAppUpdateResult('', '正在检查更新…');
+    else if (info.updateAvailable) setAppUpdateResult('ok', '发现新版本 v' + info.latest + '，正在自动下载…');
+    else setAppUpdateResult('', '当前已是最新版本（v' + info.current + '）。');
   } catch (err) { setAppUpdateResult('err', '检查失败：' + err.message); }
   finally { els.btnCheckAppUpdate.disabled = false; els.btnCheckAppUpdate.textContent = '检查程序更新'; }
 }
