@@ -7,7 +7,9 @@ vendor/kernel.tar.gz
 # Build output
 dist/
 out/
-build/
+build/*
+!build/icons/
+!build/icons/**
 
 # Logs
 *.log

@@ -48,12 +48,14 @@ deepseek-harness/
 │
 ├── scripts/                  # 辅助脚本
 │   ├── fetch-kernel.js       # ★ 打包前预下载内置内核到 vendor/kernel
+│   ├── gen-icons.js          # ★ 从源图生成全套应用图标（PNG/ICO/ICNS）
 │   ├── check-env.js          # 环境检查（Node/npm 版本）
 │   ├── build.js              # 构建检查与打包提示
 │   └── _verify.test.js       # 核心逻辑单元验证（回归）
 │
+├── build/icons/              # ★ 应用图标（icon.ico / icon.icns / 多尺寸 PNG）
 ├── vendor/kernel/            # 内置内核（打包时预下载，git 忽略）
-├── resources/                # 打包资源目录（图标等，可为空）
+├── resources/                # 图标源图等资源
 ├── dist/                     # 打包输出目录（构建后生成）
 ├── docs/                     # 文档目录
 ├── README.md                 # 本文件（项目简介 + 文件树）

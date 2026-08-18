@@ -2,6 +2,7 @@
 
 | 脚本 | 用法 | 功能 |
 |------|------|------|
+| `gen-icons.js` | `node scripts/gen-icons.js [源图]` | 从源图生成全套应用图标：PNG 多尺寸（16~1024）、Windows ICO（7 尺寸）、macOS ICNS（7 尺寸），输出到 `build/icons/` |
 | `fetch-kernel.js` | `node scripts/fetch-kernel.js [version]` | 打包前预下载 dsh 内核到 `vendor/kernel`（含 `bundle-info.json` 版本信息），打包进安装包；支持 `DSH_KERNEL_VERSION` 环境变量指定版本 |
 | `check-env.js` | `node scripts/check-env.js` | 检测 Node.js / npm 版本与可用性，输出是否满足 dsh 要求（v18+） |
 | `build.js` | `node scripts/build.js` | 语法检查所有 JS 源文件、校验 package.json，并提示打包命令 |

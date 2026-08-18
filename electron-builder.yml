@@ -10,9 +10,12 @@ publish:
   owner: mannixS
   repo: DSH-Desktop
 
+# 应用图标（build/icons 为 buildResources）
+icon: icon.png
+
 directories:
   output: dist
-  buildResources: resources
+  buildResources: build/icons
 
 files:
   - src/**/*
@@ -33,6 +36,7 @@ extraResources:
     to: kernel/kernel.tar.gz
 
 win:
+  icon: icon.ico
   target:
     - target: nsis
       arch:
@@ -45,6 +49,11 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
   shortcutName: DSH Desktop
+  # 安装程序图标与卸载程序图标
+  installerIcon: icon.ico
+  uninstallerIcon: icon.ico
+  # 安装引导界面右侧大图（必须 164x314 bmp，由构建时自动从 png 转换）
+  installerHeaderIcon: icon.ico
 
 # 注意：macOS 产物使用 zip 而非 dmg。
 # GitHub Actions 的 macos-latest 已迁移到 arm64 runner，在 arm64 上交叉创建
@@ -52,6 +61,7 @@ nsis:
 # zip 内含 .app，解压即可用，arm64 runner 上稳定。
 # 如需 dmg，可在本地 macOS（Intel 或 arm）执行 `npx electron-builder --mac dmg`。
 mac:
+  icon: icon.icns
   target:
     - target: zip
       arch:
