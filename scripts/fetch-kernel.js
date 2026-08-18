@@ -108,18 +108,33 @@ fs.writeFileSync(INFO_FILE, JSON.stringify(info, null, 2), 'utf8');
 const lock = path.join(kernelDir, 'package-lock.json');
 if (fs.existsSync(lock)) fs.rmSync(lock, { force: true });
 
-// 7. 打包为单文件归档（排除符号链接目录 .bin，避免跨平台解压问题）
+// 7. 打包为单文件归档（精简冗余内容 + 排除符号链接 .bin）
 // 注意：必须使用相对路径，规避 Windows bsdtar 把 "D:\..." 盘符误判为
 // "远程主机:路径"（rsh 风格，报 "Cannot connect to D: resolve failed"）。
 // 归档输出到 ARCHIVE（vendor/kernel.tar.gz），与 electron-builder.yml 的
 // extraResources 引用路径保持一致。
+//
+// 精简说明：node_modules 含大量运行时不需要的冗余（调试符号/源码映射/TS 源码/
+// 文档等），剔除后可显著减小安装包体积，加快 NSIS 安装与首次导入速度。
+// 已编译 JS 运行不依赖 .ts/.map/.pdb，剔除不影响 dsh 功能。
 console.log('打包内核为单文件归档 kernel.tar.gz ...');
 const archiveRel = path.relative(kernelDir, ARCHIVE).replace(/\\/g, '/'); // "../kernel.tar.gz"
-const tar = run(
-  tarCmd(),
-  ['-czf', archiveRel, '--exclude', 'node_modules/.bin', '.'],
-  { silent: true, cwd: kernelDir }
-);
+const EXCLUDES = [
+  'node_modules/.bin', // 符号链接目录，跨平台解压会出问题
+  '*.map', // sourcemap
+  '*.tsbuildinfo', // TS 增量编译缓存
+  '*.pdb', // 调试符号
+  '*.ts', // TS 源码（已编译）
+  '*.mts', // TS 源码（ESM）
+  '*.cts', // TS 源码（CJS）
+  '*/test/*', '*/tests/*', '*/__tests__/*', // 测试
+  '*/docs/*', '*/doc/*', // 文档
+  '*/examples/*', '*/example/*', // 示例
+];
+const tarArgs = ['-czf', archiveRel];
+for (const e of EXCLUDES) tarArgs.push('--exclude', e);
+tarArgs.push('.');
+const tar = run(tarCmd(), tarArgs, { silent: true, cwd: kernelDir });
 if (tar.status !== 0) {
   console.error('✗ 内核归档打包失败:');
   console.error((tar.stderr || '').trim() || (tar.stdout || '').trim() || '未知错误');
