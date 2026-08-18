@@ -39,24 +39,19 @@ nsis:
   createDesktopShortcut: always
   shortcutName: DSH Desktop
 
+# 注意：macOS 产物使用 zip 而非 dmg。
+# GitHub Actions 的 macos-latest 已迁移到 arm64 runner，在 arm64 上交叉创建
+# x64 的 APFS DMG 时 hdiutil detach 会失败（electron-builder 25.x 已知问题）。
+# zip 内含 .app，解压即可用，arm64 runner 上稳定。
+# 如需 dmg，可在本地 macOS（Intel 或 arm）执行 `npx electron-builder --mac dmg`。
 mac:
   target:
-    - target: dmg
+    - target: zip
       arch:
         - arm64
         - x64
   category: public.app-category.developer-tools
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
   notarize: false
-
-dmg:
-  title: ${productName} ${version}
-  contents:
-    - x: 130
-      y: 220
-    - x: 410
-      y: 220
-      type: link
-      path: /Applications
 
 npmRebuild: false
