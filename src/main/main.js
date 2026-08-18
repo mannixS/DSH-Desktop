@@ -41,7 +41,11 @@ function bootstrap() {
     port: 3080,
     logger: makeLogger('[dsh]'),
   });
-  const appUpdater = new AppUpdater({ settings, logger: makeLogger('[app-update]') });
+  const appUpdater = new AppUpdater({
+    settings,
+    logger: makeLogger('[app-update]'),
+    onEvent: (event, payload) => notifyRenderer('app-update:event', { event, payload }),
+  });
 
   // 推送日志给渲染进程（滚动保留最近 500 条）
   const logBuffer = [];
@@ -83,7 +87,12 @@ function bootstrap() {
       minWidth: 960,
       minHeight: 640,
       title: 'DSH Desktop',
-      backgroundColor: '#0f1117',
+      // 无边框窗口（去掉标题栏/菜单栏），四周圆角由 CSS + 透明背景实现
+      frame: false,
+      transparent: true,
+      // macOS 也使用无边框
+      titleBarStyle: 'hidden',
+      backgroundColor: '#00000000',
       webPreferences: {
         preload: path.join(__dirname, '..', 'preload.js'),
         contextIsolation: true,
@@ -314,13 +323,31 @@ function bootstrap() {
       return await appUpdater.checkForUpdate();
     });
 
-    ipcMain.handle('app-update:download', async (_e, url, filename) => {
-      return await appUpdater.downloadUpdate(url, filename);
+    // 安装并重启（electron-updater 自动更新）
+    ipcMain.handle('app-update:install', async () => {
+      return appUpdater.downloadAndInstall();
     });
 
-    ipcMain.handle('app-update:open-release', async (_e, url) => {
-      if (url) shell.openExternal(url);
+    // ---------- 窗口控制（无边框自绘按钮） ----------
+    ipcMain.handle('window:minimize', () => {
+      mainWindow?.minimize();
       return { ok: true };
+    });
+    ipcMain.handle('window:toggle-maximize', () => {
+      if (!mainWindow) return { ok: true };
+      if (mainWindow.isMaximized()) {
+        mainWindow.unmaximize();
+      } else {
+        mainWindow.maximize();
+      }
+      return { ok: true, maximized: mainWindow.isMaximized() };
+    });
+    ipcMain.handle('window:close', () => {
+      mainWindow?.close();
+      return { ok: true };
+    });
+    ipcMain.handle('window:is-maximized', () => {
+      return { ok: true, maximized: mainWindow ? mainWindow.isMaximized() : false };
     });
   }
 
@@ -355,13 +382,12 @@ function bootstrap() {
     scheduleAutoCheck();
     setTimeout(runAutoCheck, 2500);
 
-    // 客户端自身程序更新检查（预留；未配置更新源时自动跳过）
+    // 客户端自身程序自动更新（electron-updater）
+    // 已发布到 GitHub，默认指向本仓库 mannixS/DSH-Desktop
+    appUpdater.init();
     if (settings.get('appAutoCheckUpdate')) {
       setTimeout(async () => {
-        const info = await appUpdater.checkForUpdate();
-        if (info.configured && info.hasUpdate && mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('app-update:available', info);
-        }
+        await appUpdater.checkForUpdate();
       }, 5000);
     }
   });

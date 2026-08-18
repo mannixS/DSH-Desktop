@@ -129,25 +129,27 @@ async function main() {
   fs.rmSync(bundledDir, { recursive: true, force: true });
   fs.rmSync(userKernelDir, { recursive: true, force: true });
 
-  console.log('=== 7. 客户端程序更新版本比较（AppUpdater._compareAppVersions） ===');
+  console.log('=== 7. 客户端程序更新模块（electron-updater 封装） ===');
   const { AppUpdater } = require('../src/main/app-updater');
   const fakeSettings = { get: () => '' };
   const au = new AppUpdater({ settings: fakeSettings, logger: { info() {}, warn() {}, error() {} } });
-  await t('1.2.0 > 1.1.9', () => assert.strictEqual(au._compareAppVersions('1.2.0', '1.1.9'), 1));
-  await t('1.0.0 < 1.0.1', () => assert.strictEqual(au._compareAppVersions('1.0.0', '1.0.1'), -1));
-  await t('2.0.0 == 2.0.0', () => assert.strictEqual(au._compareAppVersions('2.0.0', '2.0.0'), 0));
-  await t('1.10.0 > 1.9.0（数字比较）', () => assert.strictEqual(au._compareAppVersions('1.10.0', '1.9.0'), 1));
-  await t('_normalizeTag 去掉 v 前缀', () => assert.strictEqual(au._normalizeTag('v1.2.3'), '1.2.3'));
-  await t('_normalizeTag 保留预发布', () => assert.strictEqual(au._normalizeTag('1.2.3-beta.1'), '1.2.3-beta.1'));
   await t('isConfigured false（未配置更新源）', () => assert.strictEqual(au.isConfigured(), false));
   await t('isConfigured true（配置 owner/repo）', () => {
     const au2 = new AppUpdater({
       settings: {
-        get: (k) => (k === 'appUpdateOwner' ? 'me' : k === 'appUpdateRepo' ? 'dsh-desktop' : ''),
+        get: (k) => (k === 'appUpdateOwner' ? 'mannixS' : k === 'appUpdateRepo' ? 'DSH-Desktop' : ''),
       },
       logger: { info() {}, warn() {}, error() {} },
     });
     assert.strictEqual(au2.isConfigured(), true);
+  });
+  // 说明：currentVersion 与 init 依赖 electron 运行时（app / autoUpdater），
+  // 在 node 环境下不可测。此处仅验证配置判断逻辑与类结构完整性。
+  await t('currentVersion 属性存在', () => {
+    assert.ok('currentVersion' in au);
+  });
+  await t('类导出 AppUpdater 为构造器', () => {
+    assert.strictEqual(typeof AppUpdater, 'function');
   });
 
   console.log('');

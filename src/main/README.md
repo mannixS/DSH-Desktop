@@ -9,7 +9,7 @@
 | `main.js` | 主进程入口。创建窗口、注册全部 IPC、编排自动更新（启动检查 + 定时轮询）、首启导入内置内核、单实例锁、退出清理 |
 | `kernel-manager.js` | **内核管理**。本地版本读取、npm registry 版本检查（latest/stable）、Node 环境检测、内核安装（临时目录安装 → 校验 → 备份 → 原子替换）、回滚、内置内核导入（`getBundledKernelInfo` / `importBundledKernel`） |
 | `dsh-host.js` | **dsh 进程托管**。用系统 Node 启动 `dsh web`（设置 `DSH_HOME` 隔离数据）、停止/重启、日志实时回调 |
-| `app-updater.js` | **客户端自身程序更新（预留）**。GitHub Releases / 自定义 JSON 更新源检查、匹配平台安装包、下载到系统下载目录 |
+| `app-updater.js` | **客户端自身程序自动更新**。基于 electron-updater，指向 GitHub Releases，检查/自动下载/安装重启；仅在打包环境启用 |
 | `settings.js` | 设置持久化。JSON 文件读写（userData/settings.json），默认值见 `DEFAULTS` |
 
 ## 关键流程
@@ -35,9 +35,9 @@
 | `status:get` | 获取完整状态快照（内核 / 内置内核 / Node / dsh / 设置） |
 | `update:check` / `update:install` / `update:rollback` | 内核更新操作 |
 | `kernel:install` / `kernel:remove` | 内核安装 / 移除 |
-| `app-update:check` | 客户端程序更新检查 |
-| `app-update:download` | 下载客户端新版本安装包 |
-| `app-update:open-release` | 打开 Release 页面 |
+| `app-update:check` | 客户端程序更新检查（自动下载） |
+| `app-update:install` | 安装并重启客户端（新版本已下载） |
+| `window:minimize` / `window:toggle-maximize` / `window:close` / `window:is-maximized` | 无边框窗口控制 |
 | `dsh:start` / `dsh:stop` / `dsh:restart` | 进程控制 |
 | `settings:get` / `settings:update` | 设置读写 |
 | `logs:get` | 日志获取 |

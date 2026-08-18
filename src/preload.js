@@ -30,13 +30,18 @@ const api = {
   // ---------- 日志 ----------
   getLogs: () => ipcRenderer.invoke('logs:get'),
 
+  // ---------- 窗口控制（无边框自绘按钮） ----------
+  windowMinimize: () => ipcRenderer.invoke('window:minimize'),
+  windowToggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
+  windowClose: () => ipcRenderer.invoke('window:close'),
+  windowIsMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+
   // ---------- 系统 ----------
   openNodeDownload: () => ipcRenderer.invoke('env:openNodeDownload'),
 
-  // ---------- 客户端自身程序更新（预留） ----------
+  // ---------- 客户端自身程序自动更新 ----------
   checkAppUpdate: () => ipcRenderer.invoke('app-update:check'),
-  downloadAppUpdate: (url, filename) => ipcRenderer.invoke('app-update:download', url, filename),
-  openAppRelease: (url) => ipcRenderer.invoke('app-update:open-release', url),
+  installAppUpdate: () => ipcRenderer.invoke('app-update:install'),
 
   // ---------- 事件订阅 ----------
   onUpdateAvailable: (cb) => ipcRenderer.on('update:available', (_e, info) => cb(info)),
@@ -44,7 +49,7 @@ const api = {
   onUpdateInstallProgress: (cb) => ipcRenderer.on('update:install-progress', (_e, msg) => cb(msg)),
   onUpdateInstallDone: (cb) => ipcRenderer.on('update:install-done', (_e, result) => cb(result)),
   onUpdateInstallError: (cb) => ipcRenderer.on('update:install-error', (_e, msg) => cb(msg)),
-  onAppUpdateAvailable: (cb) => ipcRenderer.on('app-update:available', (_e, info) => cb(info)),
+  onAppUpdateEvent: (cb) => ipcRenderer.on('app-update:event', (_e, data) => cb(data.event, data.payload)),
   onDshLog: (cb) => ipcRenderer.on('dsh:log', (_e, line) => cb(line)),
 
   // ---------- 内置内核导入进度 ----------

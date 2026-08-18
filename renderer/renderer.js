@@ -15,8 +15,11 @@ const els = {
   stageFrame: $('#stage-frame'), dshWebview: $('#dsh-webview'),
   loadingText: $('#stage-loading-text'), btnStageRetry: $('#btn-stage-retry'),
   statusDot: $('#status-dot'), statusText: $('#status-text'), statusExtra: $('#status-extra'),
-  statusVersion: $('#status-version'), btnStart: $('#btn-start-dsh'), btnStop: $('#btn-stop-dsh'),
+  statusVersion: $('#status-version'),   btnStart: $('#btn-start-dsh'), btnStop: $('#btn-stop-dsh'),
   btnOpenSettings: $('#btn-open-settings'),
+  // 窗口控制
+  winMin: $('#win-min'), winMax: $('#win-max'), winMaxIcon: $('#win-max-icon'), winClose: $('#win-close'),
+  titlebar: $('#titlebar'),
   settingsModal: $('#settings-modal'), settingsBackdrop: $('#settings-backdrop'),
   btnCloseSettings: $('#btn-close-settings'), btnSaveSettings: $('#btn-save-settings'),
   settingsSaveTip: $('#settings-save-tip'), kernelVersionInfo: $('#kernel-version-info'),
@@ -162,23 +165,19 @@ async function handleCheckAppUpdate() {
   try {
     const info = await api.checkAppUpdate();
     lastAppUpdateInfo = info;
-    if (!info.configured) setAppUpdateResult('', '未配置程序更新源，请填写 GitHub 仓库或自定义 URL 并保存。');
+    if (!info.configured) setAppUpdateResult('', '未配置更新源，请填写 GitHub 仓库并保存。');
     else if (info.error) setAppUpdateResult('err', '检查失败：' + info.error);
-    else if (info.hasUpdate) { setAppUpdateResult('ok', '发现新版本 v' + info.latest + '（当前 v' + info.current + '）。'); els.btnDownloadAppUpdate.disabled = !info.downloadUrl; }
-    else setAppUpdateResult('', '当前已是最新版本（v' + info.current + '）。');
+    else setAppUpdateResult('', '正在检查更新…');
   } catch (err) { setAppUpdateResult('err', '检查失败：' + err.message); }
   finally { els.btnCheckAppUpdate.disabled = false; els.btnCheckAppUpdate.textContent = '检查程序更新'; }
 }
 
-async function handleDownloadAppUpdate() {
-  if (!lastAppUpdateInfo || !lastAppUpdateInfo.downloadUrl) return;
-  els.btnDownloadAppUpdate.disabled = true;
+// 安装并重启（新版本已下载完成后）
+async function handleInstallAppUpdate() {
   try {
-    const res = await api.downloadAppUpdate(lastAppUpdateInfo.downloadUrl, lastAppUpdateInfo.assetName);
-    if (res.ok) setAppUpdateResult('ok', '安装包已下载到：\n' + res.filePath + '\n\n请关闭客户端后运行安装包完成升级。');
-    else setAppUpdateResult('err', '下载失败：' + (res.error || ''));
-  } catch (err) { setAppUpdateResult('err', '下载失败：' + err.message); }
-  finally { els.btnDownloadAppUpdate.disabled = false; }
+    const res = await api.installAppUpdate();
+    if (res && res.ok === false) setAppUpdateResult('err', '安装失败：' + (res.error || ''));
+  } catch (err) { setAppUpdateResult('err', '安装失败：' + err.message); }
 }
 
 async function handleSaveSettings() {
@@ -206,7 +205,52 @@ async function handleRemoveKernel() {
   catch (err) { showToast('error', '移除内核失败：' + err.message); }
 }
 
+// ---------- 主题色动态匹配 dsh 页面 ----------
+function applyThemeColor(color) {
+  if (!color) return;
+  // 设置主题色相关的 CSS 变量（标题栏、按钮、状态点等随 dsh 页面主色调）
+  document.documentElement.style.setProperty('--theme-color', color);
+  document.documentElement.style.setProperty('--primary', color);
+}
+// 从 webview 中提取 dsh 页面的主色调（读取其 CSS 变量/主题色）
+function extractThemeFromWebview() {
+  if (!els.dshWebview || !els.dshWebview.getWebContents) return;
+  try {
+    els.dshWebview.executeJavaScript(`
+      (() => {
+        const css = getComputedStyle(document.documentElement);
+        // 常见主题色来源：primary/accent/品牌色
+        const candidates = ['--primary','--accent','--brand','--color-primary','--main-color'];
+        for (const c of candidates) {
+          const v = css.getPropertyValue(c);
+          if (v && v.trim() && v.trim() !== 'transparent') return v.trim();
+        }
+        return null;
+      })()
+    `).then((color) => {
+      if (color) applyThemeColor(color);
+    }).catch(() => {});
+  } catch {}
+}
+
+// ---------- 事件绑定 ----------
 function bindEvents() {
+  // 窗口控制
+  els.winMin.addEventListener('click', () => api.windowMinimize());
+  els.winMax.addEventListener('click', async () => {
+    const r = await api.windowToggleMaximize();
+    updateMaxIcon(r && r.maximized);
+  });
+  els.winClose.addEventListener('click', () => api.windowClose());
+  async function updateMaxIcon(maximized) {
+    if (!els.winMaxIcon) return;
+    els.winMaxIcon.innerHTML = maximized
+      ? '<path d="M2.5 0.5h7v7h-7z" fill="none" stroke="currentColor"/><path d="M0.5 2.5h7v7h-7z" fill="none" stroke="currentColor"/>'
+      : '<path d="M0.5 0.5h9v9h-9z" fill="none" stroke="currentColor"/>';
+  }
+  // 同步最大化状态
+  api.windowIsMaximized().then((r) => updateMaxIcon(r && r.maximized));
+
   els.btnStart.addEventListener('click', handleStart);
   els.btnStop.addEventListener('click', handleStop);
   els.btnOpenSettings.addEventListener('click', openSettings);
@@ -219,11 +263,15 @@ function bindEvents() {
   els.btnRemoveKernel.addEventListener('click', handleRemoveKernel);
   els.btnOpenNodeDownload.addEventListener('click', () => api.openNodeDownload());
   els.btnCheckAppUpdate.addEventListener('click', handleCheckAppUpdate);
-  els.btnDownloadAppUpdate.addEventListener('click', handleDownloadAppUpdate);
+  els.btnDownloadAppUpdate.addEventListener('click', handleInstallAppUpdate);
 
   if (els.dshWebview) {
     els.dshWebview.addEventListener('did-start-loading', () => { showStage('loading'); setStageLoading('正在加载工作台…'); });
-    els.dshWebview.addEventListener('did-stop-loading', () => { wsReady = true; showStage('frame'); setStatus('dsh 运行中', 'green'); });
+    els.dshWebview.addEventListener('did-stop-loading', () => {
+      wsReady = true; showStage('frame'); setStatus('dsh 运行中', 'green');
+      // 页面加载完成后提取 dsh 主题色
+      setTimeout(extractThemeFromWebview, 1500);
+    });
     els.dshWebview.addEventListener('did-fail-load', (e) => {
       if (e.errorCode === -3) return;
       wsReady = false; showStage('failed');
@@ -254,7 +302,15 @@ function bindEvents() {
   api.onKernelImportDone((info) => { setStatus('内核就绪，点击启动', 'yellow'); showToast('ok', '内置内核 v' + (info.version || '?') + ' 导入完成'); refreshStatus(); });
   api.onKernelImportError((m) => showToast('error', '内置内核导入失败：' + m));
 
-  api.onAppUpdateAvailable((info) => { lastAppUpdateInfo = info; setAppUpdateResult('ok', '发现客户端新版本 v' + info.latest + '（当前 v' + info.current + '）。可到设置中下载。'); });
+  // 程序自动更新事件（electron-updater）
+  api.onAppUpdateEvent((event, payload) => {
+    if (event === 'checking') setAppUpdateResult('', '正在检查程序更新…');
+    else if (event === 'available') { setAppUpdateResult('ok', '发现新版本 v' + (payload && payload.version) + '，正在自动下载…'); els.btnDownloadAppUpdate.disabled = true; }
+    else if (event === 'not-available') setAppUpdateResult('', '当前已是最新版本。');
+    else if (event === 'progress') setAppUpdateResult('', '正在下载更新：' + (payload && payload.percent) + '%');
+    else if (event === 'downloaded') { setAppUpdateResult('ok', '新版本已下载完成，点击「安装并重启」完成升级。'); els.btnDownloadAppUpdate.disabled = false; }
+    else if (event === 'error') { setAppUpdateResult('err', '更新失败：' + (payload && payload.message)); els.btnDownloadAppUpdate.disabled = true; }
+  });
 }
 
 bindEvents();

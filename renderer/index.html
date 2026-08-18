@@ -8,6 +8,25 @@
 </head>
 <body>
 <div class="app">
+  <!-- 自绘标题栏（无边框窗口） -->
+  <header class="titlebar" id="titlebar">
+    <div class="titlebar-brand">
+      <span class="titlebar-logo">DSH</span>
+      <span class="titlebar-title">DSH Desktop</span>
+    </div>
+    <div class="titlebar-controls">
+      <button class="win-btn" id="win-min" title="最小化">
+        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 4.5h10v1H0z" fill="currentColor"/></svg>
+      </button>
+      <button class="win-btn" id="win-max" title="最大化">
+        <svg id="win-max-icon" width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5h9v9h-9z" fill="none" stroke="currentColor"/></svg>
+      </button>
+      <button class="win-btn win-close" id="win-close" title="关闭">
+        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+    </div>
+  </header>
+
   <!-- 全屏 dsh 工作台 -->
   <main class="stage">
     <div class="stage-empty" id="stage-empty">
@@ -125,8 +144,8 @@
           <label class="switch"><input type="checkbox" id="set-app-auto-check"><span class="slider"></span></label>
         </div>
         <div class="card-actions">
-          <button class="btn btn-sm" id="btn-check-app-update">检查程序更新</button>
-          <button class="btn btn-sm btn-accent" id="btn-download-app-update" disabled>下载新版本</button>
+          <button class="btn btn-sm" id="btn-check-app-update">检查更新</button>
+          <button class="btn btn-sm btn-accent" id="btn-download-app-update" disabled>安装并重启</button>
         </div>
         <div class="app-update-result" id="app-update-result"></div>
       </section>

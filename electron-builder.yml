@@ -3,6 +3,13 @@ appId: com.deepseek.dshdesktop
 productName: DSH Desktop
 copyright: Copyright © 2026 DeepSeek Harness Client Team
 
+# 程序自动更新源（electron-updater）
+# 指向 GitHub Releases，打包时生成 latest.yml / latest-mac.yml 随 Release 发布
+publish:
+  provider: github
+  owner: mannixS
+  repo: DSH-Desktop
+
 directories:
   output: dist
   buildResources: resources
