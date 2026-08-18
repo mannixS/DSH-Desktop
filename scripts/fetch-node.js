@@ -7,7 +7,7 @@
  * 客户端使用内置 Node 运行 dsh 内核，无需联网安装。
  *
  * 用法：node scripts/fetch-node.js [version]
- *   - 省略 version 时用默认 v24.2.0（当前推荐）
+ *   - 省略 version 时用默认 v24.17.0（当前最新 LTS）
  *   - 可通过环境变量 DSH_NODE_VERSION 指定版本
  *
  * 平台差异：
@@ -21,7 +21,7 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const vendorDir = path.join(root, 'vendor');
-const NODE_VERSION = process.env.DSH_NODE_VERSION || process.argv[2] || 'v24.2.0';
+const NODE_VERSION = process.env.DSH_NODE_VERSION || process.argv[2] || 'v24.17.0';
 const INFO_FILE = path.join(vendorDir, 'node', 'bundle-info.json');
 
 // 官方下载基础地址
@@ -61,15 +61,19 @@ async function main() {
   fs.mkdirSync(downloadDir, { recursive: true });
   const archivePath = path.join(downloadDir, file);
 
-  // 1. 下载
-  console.log(`下载 ${url}`);
-  try {
-    const size = await download(url, archivePath);
-    console.log(`✓ 已下载 ${file} (${Math.round(size / 1048576)} MB)`);
-  } catch (err) {
-    console.error(`✗ 下载失败: ${err.message}`);
-    console.error('  可指定版本: DSH_NODE_VERSION=v22.12.0 node scripts/fetch-node.js');
-    process.exit(1);
+  // 1. 下载（若已缓存则复用，避免重复下载）
+  if (!fs.existsSync(archivePath) || fs.statSync(archivePath).size === 0) {
+    console.log(`下载 ${url}`);
+    try {
+      const size = await download(url, archivePath);
+      console.log(`✓ 已下载 ${file} (${Math.round(size / 1048576)} MB)`);
+    } catch (err) {
+      console.error(`✗ 下载失败: ${err.message}`);
+      console.error('  可指定版本: DSH_NODE_VERSION=v22.12.0 node scripts/fetch-node.js');
+      process.exit(1);
+    }
+  } else {
+    console.log(`✓ 使用已缓存的 ${file}`);
   }
 
   // 2. 解压到 vendor/node
@@ -78,14 +82,16 @@ async function main() {
   fs.mkdirSync(outDir, { recursive: true });
 
   if (isWin) {
-    // 用 PowerShell Expand-Archive 解压 zip
-    const r = run('powershell', ['-NoProfile', '-Command', `Expand-Archive -Path '${archivePath}' -DestinationPath '${outDir}' -Force`], { silent: true });
-    if (r.status !== 0) {
-      console.error('✗ zip 解压失败: ' + ((r.stderr || '').trim() || (r.stdout || '').trim()));
+    // Windows：用 PowerShell Expand-Archive 解压（spawnSync 数组传参，避免引号丢失）
+    const ps = spawnSync('powershell', ['-NoProfile', '-Command',
+      `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${outDir}' -Force`],
+      { encoding: 'utf8', cwd: outDir });
+    if (ps.status !== 0) {
+      console.error('✗ zip 解压失败: ' + ((ps.stderr || '').trim() || (ps.stdout || '').trim() || 'unknown'));
       process.exit(1);
     }
-    // 将 node-vXX-win-x64 内容上移到 outDir
-    const inner = fs.readdirSync(outDir).find((n) => n.startsWith('node-v'));
+    // 将 node-vXX-win-x64 顶层目录内容上移到 outDir
+    const inner = fs.readdirSync(outDir).find((n) => n.startsWith('node-v') && fs.statSync(path.join(outDir, n)).isDirectory());
     if (inner) {
       const innerDir = path.join(outDir, inner);
       for (const e of fs.readdirSync(innerDir)) {
@@ -103,13 +109,13 @@ async function main() {
     }
   }
 
-  // 3. 验证 node 可运行
-  const nodeExe = path.join(outDir, isWin ? 'node.exe' : 'bin', 'node');
+  // 3. 验证 node 可运行（用绝对路径，避免解析到系统 node）
+  const nodeExe = isWin ? path.join(outDir, 'node.exe') : path.join(outDir, 'bin', 'node');
   if (!fs.existsSync(nodeExe)) {
     console.error('✗ 解压后未找到 node 可执行文件: ' + nodeExe);
     process.exit(1);
   }
-  const ver = run(nodeCmd(), ['--version'], { silent: true, cwd: outDir });
+  const ver = run(nodeExe, ['--version'], { silent: true });
   if (ver.status !== 0) {
     console.error('✗ 内置 node 无法运行');
     process.exit(1);
