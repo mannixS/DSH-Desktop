@@ -100,11 +100,22 @@ async function main() {
       fs.rmSync(innerDir, { recursive: true, force: true });
     }
   } else {
-    // macOS/Linux 用 tar 解压（相对路径避免盘符问题）
-    const archiveRel = path.relative(outDir, archivePath).replace(/\\/g, '/');
-    const r = run('tar', ['-xzf', archiveRel, '--strip-components=1'], { silent: true, cwd: outDir });
+    // macOS/Linux 用 tar 解压。
+    // 注意：bsdtar 对 "-xzf <相对路径>" 连写参数有解析歧义（会把 m 当文件），
+    // 故用分开的参数写法 + 绝对路径 + cwd 指定解压目录（不经 shell）。
+    const mkdir = spawnSync('mkdir', ['-p', outDir], { encoding: 'utf8' });
+    if (mkdir.status !== 0) {
+      console.error('✗ 创建目录失败: ' + (mkdir.stderr || '').trim());
+      process.exit(1);
+    }
+    const r = spawnSync('tar', ['-x', '-z', '-f', archivePath, '--strip-components', '1'], {
+      encoding: 'utf8',
+      cwd: outDir,
+      stdio: 'pipe',
+    });
     if (r.status !== 0) {
       console.error('✗ tar 解压失败: ' + ((r.stderr || '').trim() || (r.stdout || '').trim()));
+      console.error('  命令: tar -x -z -f ' + archivePath + ' --strip-components 1 (cwd=' + outDir + ')');
       process.exit(1);
     }
   }
