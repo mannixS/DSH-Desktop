@@ -72,8 +72,24 @@ deepseek-harness/
 
 ### 环境要求
 
-- **Node.js v18+**（推荐 v24，dsh 官方要求），且 npm 可用
+- **Node.js v24+**（推荐最新 LTS v24，dsh 官方要求 v18+，建议 v24），且 npm 可用
 - 本客户端为跨平台应用：Windows 10/11 x64、macOS 12+（Apple Silicon / Intel）
+
+### macOS 安装（Gatekeeper 说明）
+
+> 由于应用未进行 Apple 签名/公证，macOS 首次打开会提示"应用已损坏，无法打开"或"无法验证开发者"。这是 Gatekeeper 对未签名应用的拦截，**并非文件损坏**。请按以下步骤放行：
+
+```bash
+# 1. 将解压得到的 DSH Desktop.app 拖入"应用程序"（或任意位置）
+
+# 2. 在终端执行（清除下载隔离属性，解除 Gatekeeper 拦截）
+sudo xattr -cr "/Applications/DSH Desktop.app"
+
+# 3. 重新打开应用即可
+open "/Applications/DSH Desktop.app"
+```
+
+> 若提示"无法打开，因为无法验证开发者"，可改为：右键（或按住 Control 点击）应用 →「打开」→ 在弹出的对话框中点「打开」。
 
 ### 安装与运行（开发模式）
 
@@ -101,13 +117,16 @@ npm start
 - **自动安装**：可选，开启后检测到新版本自动下载安装并重启 dsh；
 - **回滚**：更新前自动备份上一版本，可在总览页一键回滚。
 
-### 客户端自身程序更新（预留）
+### 客户端自身程序自动更新
 
-客户端自身更新能力已实现检查与下载框架，通过 GitHub Releases 或自定义 JSON 端点：
+基于 electron-updater，默认指向本仓库 `mannixS/DSH-Desktop` 的 GitHub Releases：
 
-- 在「设置 → 程序更新」填写更新源（GitHub `owner/repo` 或自定义 JSON URL）并保存；
-- 点击「检查程序更新」对比当前客户端版本；有新版本时「下载新版本」下载安装包到系统下载目录；
-- 安装由用户运行安装包完成（跨平台最稳妥，可扩展为自动静默安装）。
+- 启动后自动检查（可在「设置 → 程序更新」关闭）；
+- 检测到新版本自动下载（显示进度），下载完成后点击「安装并重启」完成升级；
+- 也可在「设置 → 程序更新」手动点「检查更新」；
+- 如需指向其他源，可填写自定义 GitHub `owner/repo` 或 JSON URL 覆盖默认源。
+
+> 自动更新依赖 Release 中的 `latest.yml` / `latest-mac.yml`（electron-builder 打包时生成并随 Release 发布）。
 
 ### 打包分发（Windows / macOS）
 

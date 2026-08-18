@@ -28,11 +28,11 @@ const DEFAULTS = {
   lastCheckAt: null,
   // 上次更新完成时间（时间戳）
   lastUpdateAt: null,
-  // ---- 客户端自身程序更新（预留）----
-  // GitHub Releases 模式：填 owner + repo（如 'your-name/dsh-desktop'）
-  appUpdateOwner: '',
-  appUpdateRepo: '',
-  // 自定义 JSON 更新源：返回 { version, notes, published_at, assets: [{ name, url, platform }] }
+  // ---- 客户端自身程序自动更新 ----
+  // GitHub Releases 模式：默认指向本仓库 mannixS/DSH-Desktop（可覆盖）
+  appUpdateOwner: 'mannixS',
+  appUpdateRepo: 'DSH-Desktop',
+  // 自定义 JSON 更新源（可选，覆盖 GitHub 源）
   appUpdateUrl: '',
   // 是否自动检查程序更新（启动后延时检查）
   appAutoCheckUpdate: true,

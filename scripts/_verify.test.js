@@ -133,11 +133,11 @@ async function main() {
   const { AppUpdater } = require('../src/main/app-updater');
   const fakeSettings = { get: () => '' };
   const au = new AppUpdater({ settings: fakeSettings, logger: { info() {}, warn() {}, error() {} } });
-  await t('isConfigured false（未配置更新源）', () => assert.strictEqual(au.isConfigured(), false));
-  await t('isConfigured true（配置 owner/repo）', () => {
+  await t('isConfigured true（空设置默认指向本仓库）', () => assert.strictEqual(au.isConfigured(), true));
+  await t('isConfigured true（显式配置 owner/repo）', () => {
     const au2 = new AppUpdater({
       settings: {
-        get: (k) => (k === 'appUpdateOwner' ? 'mannixS' : k === 'appUpdateRepo' ? 'DSH-Desktop' : ''),
+        get: (k) => (k === 'appUpdateOwner' ? 'other' : k === 'appUpdateRepo' ? 'repo' : ''),
       },
       logger: { info() {}, warn() {}, error() {} },
     });

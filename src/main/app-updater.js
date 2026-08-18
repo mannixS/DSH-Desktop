@@ -41,10 +41,10 @@ class AppUpdater {
     return app.getVersion();
   }
 
-  /** 更新源是否已配置（GitHub owner/repo） */
+  /** 更新源是否已配置（GitHub owner/repo，带默认兜底） */
   isConfigured() {
-    const owner = (this.settings.get('appUpdateOwner') || '').trim();
-    const repo = (this.settings.get('appUpdateRepo') || '').trim();
+    const owner = (this.settings.get('appUpdateOwner') || 'mannixS').trim();
+    const repo = (this.settings.get('appUpdateRepo') || 'DSH-Desktop').trim();
     return !!(owner && repo);
   }
 
