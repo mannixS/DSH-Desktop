@@ -365,18 +365,24 @@ function bootstrap() {
     registerIpc();
     createWindow();
 
-    // 首次启动：导入安装包内置内核（若无网络也可直接使用）
-    await ensureBundledKernel();
+    // 提前推送"启动中"状态，避免窗口显示空白/黑屏
+    setTimeout(() => notifyRenderer('dsh:start-progress', '正在初始化...'), 200);
 
-    // 应用启动后自动运行 dsh（若启用了 autoStartDsh 且内核可用），
-    // 使默认主页（工作台）直接呈现 DSH 界面
-    if (settings.get('autoStartDsh')) {
-      const local = await kernelManager.getLocalKernelInfo();
-      if (local.installed && !dshHost.running) {
-        pushLog('[dsh]', '应用启动，自动运行 dsh 服务...');
-        dshHost.start({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
+    // 导入内置内核与自动启动 dsh 并行执行，缩短等待时间：
+    // 先导入内核（若需），再自动运行 dsh；两者不互相阻塞窗口交互
+    const init = (async () => {
+      await ensureBundledKernel();
+      // 应用启动后自动运行 dsh（若启用了 autoStartDsh 且内核可用）
+      if (settings.get('autoStartDsh')) {
+        const local = await kernelManager.getLocalKernelInfo();
+        if (local.installed && !dshHost.running) {
+          pushLog('[dsh]', '应用启动，自动运行 dsh 服务...');
+          dshHost.start({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
+        }
       }
-    }
+    })();
+    // 不 await，让窗口与渲染层优先就绪，避免阻塞交互
+    init.catch((err) => pushLog('[app]', '初始化异常: ' + err.message));
 
     // 首次启动自动检查内核更新
     scheduleAutoCheck();

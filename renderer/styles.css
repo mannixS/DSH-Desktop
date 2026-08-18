@@ -1,7 +1,16 @@
 :root {
+  /* 默认（深色）主题 */
   --bg:#0f1117; --bg-elev:#171a23; --bg-card:#1c202b; --border:#2a2f3d;
   --text:#e6e9f0; --text-muted:#8b93a7; --primary:#4d7cfe; --primary-hover:#3a68e8;
   --accent:#10b981; --danger:#f43f5e; --warning:#f59e0b; --radius:10px;
+  --hover:rgba(255,255,255,.06);
+}
+/* 浅色主题（随 dsh 切换） */
+:root[data-theme="light"] {
+  --bg:#ffffff; --bg-elev:#f3f4f6; --bg-card:#fafafa; --border:#e2e5ea;
+  --text:#1a1d24; --text-muted:#6b7280; --primary:#4d7cfe; --primary-hover:#3a68e8;
+  --accent:#059669; --danger:#dc2626; --warning:#d97706;
+  --hover:rgba(0,0,0,.05);
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 html,body { height:100%; font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif; background:transparent; color:var(--text); font-size:14px; overflow:hidden; }
@@ -36,7 +45,7 @@ html,body { height:100%; font-family:"Segoe UI","PingFang SC","Microsoft YaHei",
   color:var(--text-muted); cursor:pointer;
   transition:background .15s,color .15s;
 }
-.win-btn:hover { background:rgba(255,255,255,.08); color:var(--text); }
+.win-btn:hover { background:var(--hover); color:var(--text); }
 .win-btn.win-close:hover { background:var(--danger); color:#fff; }
 
 /* 全屏工作台 */
@@ -47,7 +56,7 @@ html,body { height:100%; font-family:"Segoe UI","PingFang SC","Microsoft YaHei",
 .empty-icon { font-size:48px; color:var(--text-muted); opacity:.5; }
 .stage-overlay { position:absolute; inset:0; z-index:20; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; background:var(--bg); color:var(--text-muted); font-size:14px; text-align:center; padding:20px; }
 .stage-overlay.ws-error h3 { color:var(--text); margin-bottom:4px; }
-.ws-spinner { width:38px; height:38px; border:3px solid rgba(255,255,255,.12); border-top-color:var(--primary); border-radius:50%; animation:ws-spin .9s linear infinite; }
+.ws-spinner { width:38px; height:38px; border:3px solid var(--border); border-top-color:var(--primary); border-radius:50%; animation:ws-spin .9s linear infinite; }
 @keyframes ws-spin { to { transform:rotate(360deg); } }
 
 /* 底部状态栏（降低高度） */
@@ -69,8 +78,8 @@ html,body { height:100%; font-family:"Segoe UI","PingFang SC","Microsoft YaHei",
 .dot-red { background:var(--danger); }
 
 /* 按钮 */
-.btn { padding:8px 16px; border-radius:8px; border:1px solid var(--border); background:rgba(255,255,255,.05); color:var(--text); font-size:13px; cursor:pointer; transition:background .15s,opacity .15s; }
-.btn:hover:not(:disabled) { background:rgba(255,255,255,.1); }
+.btn { padding:8px 16px; border-radius:8px; border:1px solid var(--border); background:var(--hover); color:var(--text); font-size:13px; cursor:pointer; transition:background .15s,opacity .15s; }
+.btn:hover:not(:disabled) { background:var(--hover); }
 .btn:disabled { opacity:.4; cursor:not-allowed; }
 .btn-sm { padding:5px 12px; font-size:12px; border-radius:6px; }
 .btn-primary { background:var(--primary); border-color:var(--primary); color:#fff; }
@@ -98,24 +107,24 @@ html,body { height:100%; font-family:"Segoe UI","PingFang SC","Microsoft YaHei",
 .setting-row:last-child { border-bottom:none; }
 .setting-label { font-size:13px; font-weight:500; }
 .env-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; margin-bottom:10px; }
-.env-item { background:rgba(255,255,255,.03); border-radius:8px; padding:12px; }
+.env-item { background:var(--hover); border-radius:8px; padding:12px; }
 .env-item label { font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px; }
 .env-item span { font-size:14px; font-weight:600; font-family:"Cascadia Code",Consolas,monospace; }
 
 /* 开关 */
 .switch { position:relative; display:inline-block; width:42px; height:23px; flex-shrink:0; }
 .switch input { opacity:0; width:0; height:0; }
-.slider { position:absolute; inset:0; background:#3a4152; border-radius:23px; transition:background .2s; cursor:pointer; }
-.slider::before { content:""; position:absolute; width:17px; height:17px; left:3px; top:3px; background:#fff; border-radius:50%; transition:transform .2s; }
+.slider { position:absolute; inset:0; background:var(--border); border-radius:23px; transition:background .2s; cursor:pointer; }
+.slider::before { content:""; position:absolute; width:17px; height:17px; left:3px; top:3px; background:var(--text); border-radius:50%; transition:transform .2s; }
 .switch input:checked + .slider { background:var(--primary); }
 .switch input:checked + .slider::before { transform:translateX(19px); }
 
-.input-number { width:110px; padding:7px 10px; background:rgba(255,255,255,.05); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:13px; }
-.input-select { padding:7px 10px; background:rgba(255,255,255,.05); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:13px; min-width:180px; }
-.input-text { width:240px; padding:7px 10px; background:rgba(255,255,255,.05); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:13px; }
+.input-number { width:110px; padding:7px 10px; background:var(--hover); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:13px; }
+.input-select { padding:7px 10px; background:var(--bg-card); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:13px; min-width:180px; }
+.input-text { width:240px; padding:7px 10px; background:var(--hover); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:13px; }
 .input-text::placeholder { color:var(--text-muted); opacity:.5; }
 
-.app-update-result { margin-top:12px; padding:10px 12px; border-radius:8px; font-size:12px; background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.08); color:var(--text-muted); white-space:pre-wrap; word-break:break-all; line-height:1.6; }
+.app-update-result { margin-top:12px; padding:10px 12px; border-radius:8px; font-size:12px; background:var(--hover); border:1px solid var(--border); color:var(--text-muted); white-space:pre-wrap; word-break:break-all; line-height:1.6; }
 .app-update-result.ok { border-color:rgba(16,185,129,.35); color:var(--accent); }
 .app-update-result.err { border-color:rgba(244,63,94,.35); color:var(--danger); }
 

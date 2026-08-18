@@ -205,30 +205,49 @@ async function handleRemoveKernel() {
   catch (err) { showToast('error', '移除内核失败：' + err.message); }
 }
 
-// ---------- 主题色动态匹配 dsh 页面 ----------
-function applyThemeColor(color) {
-  if (!color) return;
-  // 设置主题色相关的 CSS 变量（标题栏、按钮、状态点等随 dsh 页面主色调）
-  document.documentElement.style.setProperty('--theme-color', color);
-  document.documentElement.style.setProperty('--primary', color);
+// ---------- 主题动态跟随 dsh 页面（明暗主题） ----------
+
+/**
+ * 应用主题模式到客户端根元素，CSS 据此切换深色/浅色配色。
+ * @param {'dark'|'light'|'system'|null} mode
+ */
+function applyThemeMode(mode) {
+  if (!mode) return;
+  // 'system' → 跟随系统
+  if (mode === 'system') {
+    mode = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
+  document.documentElement.setAttribute('data-theme', mode === 'light' ? 'light' : 'dark');
 }
-// 从 webview 中提取 dsh 页面的主色调（读取其 CSS 变量/主题色）
+
+/**
+ * 从 dsh 页面提取当前主题模式并应用到客户端。
+ * 检测顺序：data-theme 属性 → color-scheme 样式 → prefers-color-scheme 媒体查询。
+ */
 function extractThemeFromWebview() {
   if (!els.dshWebview || !els.dshWebview.getWebContents) return;
   try {
     els.dshWebview.executeJavaScript(`
       (() => {
+        // 1) data-theme 属性（VitePress/VuePress/dsh 常见）
+        const dt = document.documentElement.getAttribute('data-theme');
+        if (dt && (dt === 'dark' || dt === 'light')) return dt;
+        // 2) color-scheme CSS
         const css = getComputedStyle(document.documentElement);
-        // 常见主题色来源：primary/accent/品牌色
-        const candidates = ['--primary','--accent','--brand','--color-primary','--main-color'];
-        for (const c of candidates) {
-          const v = css.getPropertyValue(c);
-          if (v && v.trim() && v.trim() !== 'transparent') return v.trim();
+        const cs = (css.getPropertyValue('color-scheme') || '').trim().toLowerCase();
+        if (cs.includes('dark')) return 'dark';
+        if (cs.includes('light')) return 'light';
+        // 3) 背景亮度判断（兜底）
+        const bg = css.backgroundColor || '';
+        const m = bg.match(/([\\d.]+)[ ,]+([\\d.]+)[ ,]+([\\d.]+)/);
+        if (m) {
+          const lum = 0.299*parseFloat(m[1]) + 0.587*parseFloat(m[2]) + 0.114*parseFloat(m[3]);
+          return lum < 128 ? 'dark' : 'light';
         }
         return null;
       })()
-    `).then((color) => {
-      if (color) applyThemeColor(color);
+    `).then((mode) => {
+      if (mode) applyThemeMode(mode);
     }).catch(() => {});
   } catch {}
 }
@@ -269,8 +288,8 @@ function bindEvents() {
     els.dshWebview.addEventListener('did-start-loading', () => { showStage('loading'); setStageLoading('正在加载工作台…'); });
     els.dshWebview.addEventListener('did-stop-loading', () => {
       wsReady = true; showStage('frame'); setStatus('dsh 运行中', 'green');
-      // 页面加载完成后提取 dsh 主题色
-      setTimeout(extractThemeFromWebview, 1500);
+      // 页面加载完成后提取 dsh 主题
+      setTimeout(extractThemeFromWebview, 800);
     });
     els.dshWebview.addEventListener('did-fail-load', (e) => {
       if (e.errorCode === -3) return;
@@ -281,14 +300,19 @@ function bindEvents() {
 
   api.onDshState((st) => {
     if (st && st.running) {
+      // 进程已启动但服务可能未就绪：显示"启动中"，不急于加载 webview
       els.btnStart.disabled = true; els.btnStop.disabled = false;
       lastDshPort = st.port || lastDshPort;
-      setStatus('dsh 运行中', 'green');
+      setStatus('dsh 启动中', 'yellow');
       els.statusExtra.textContent = 'PID ' + (st.pid || '') + ' · 端口 ' + lastDshPort;
-      showStage('loading'); setStageLoading('正在加载工作台…'); loadWsUrl();
+      showStage('loading'); setStageLoading('dsh 服务启动中，请稍候…');
     } else { applyDshState(st); }
   });
-  api.onDshReady((info) => { setStatus('dsh 运行中', 'green'); els.statusExtra.textContent = '端口 ' + (info && info.port); loadWsUrl(); });
+  // 端口探活成功（服务就绪）后才加载 webview → 期间一直显示"启动中"，避免黑屏
+  api.onDshReady((info) => {
+    setStatus('dsh 运行中', 'green'); els.statusExtra.textContent = '端口 ' + (info && info.port);
+    showStage('loading'); setStageLoading('正在加载工作台…'); loadWsUrl();
+  });
   api.onDshStartProgress((m) => { showStage('loading'); setStageLoading(m); });
   api.onDshStopProgress((m) => { showStage('loading'); setStageLoading(m); });
   api.onDshStopDone(() => refreshStatus());
@@ -313,6 +337,9 @@ function bindEvents() {
   });
 }
 
+// ---------- 启动 ----------
 bindEvents();
 refreshStatus();
 setInterval(refreshStatus, 15000);
+// 周期检测 dsh 主题（dsh 切换明暗主题时客户端跟随）
+setInterval(extractThemeFromWebview, 5000);
