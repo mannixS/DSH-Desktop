@@ -45,6 +45,21 @@ class DshHost {
   }
 
   /**
+   * 解析 node 命令：优先用安装包内置 Node（process.resourcesPath/node），
+   * 无则回退系统 PATH 中的 node。
+   * @returns {string}
+   */
+  _resolveNodeCmd() {
+    try {
+      const bundled = process.platform === 'win32'
+        ? path.join(process.resourcesPath, 'node', 'node.exe')
+        : path.join(process.resourcesPath, 'node', 'bin', 'node');
+      if (fs.existsSync(bundled)) return bundled;
+    } catch {}
+    return process.platform === 'win32' ? 'node.exe' : 'node';
+  }
+
+  /**
    * 启动 dsh 进程
    * @param {object} [options]
    * @param {string} [options.mode='web'] 运行模式：web / tui / headless
@@ -88,7 +103,16 @@ class DshHost {
       NO_COLOR: '1',
     };
 
-    const nodeCmd = process.platform === 'win32' ? 'node.exe' : 'node';
+    // 优先使用安装包内置 Node（process.resourcesPath/node），系统无 Node 时也能运行
+    const nodeCmd = this._resolveNodeCmd();
+    // 将内置 Node 的 bin 目录加入 PATH，确保 dsh 的插件/子进程能解析到 node
+    if (nodeCmd !== 'node' && nodeCmd !== 'node.exe') {
+      const bundledBin = process.platform === 'win32'
+        ? path.dirname(nodeCmd)
+        : path.join(path.dirname(path.dirname(nodeCmd)), 'bin');
+      const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+      env[pathKey] = bundledBin + path.delimiter + (env[pathKey] || '');
+    }
     this.logger.info(`启动 dsh: ${nodeCmd} ${cliArgs.join(' ')}`);
 
     try {

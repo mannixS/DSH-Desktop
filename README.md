@@ -50,6 +50,7 @@ deepseek-harness/
 │
 ├── scripts/                  # 辅助脚本
 │   ├── fetch-kernel.js       # ★ 打包前预下载内置内核到 vendor/kernel
+│   ├── fetch-node.js         # ★ 打包前预下载便携版 Node.js 到 vendor/node
 │   ├── gen-icons.js          # ★ 从源图生成全套应用图标（PNG/ICO/ICNS）
 │   ├── check-env.js          # 环境检查（Node/npm 版本）
 │   ├── build.js              # 构建检查与打包提示
@@ -72,7 +73,8 @@ deepseek-harness/
 
 ### 环境要求
 
-- **Node.js v24+**（推荐最新 LTS v24，dsh 官方要求 v18+，建议 v24），且 npm 可用
+- **本客户端内置便携版 Node.js**：安装包已集成 Node（`process.resourcesPath/node`），**无需用户预装 Node/npm**，开箱即用；
+- 若系统已装 Node，内核更新仍用系统 Node（版本满足 v18+ 时），否则回退内置 Node；
 - 本客户端为跨平台应用：Windows 10/11 x64、macOS 12+（Apple Silicon / Intel）
 
 ### macOS 安装（Gatekeeper 说明）
@@ -180,6 +182,7 @@ CI 产物：
 | `settings.json` | 客户端设置（自动更新开关、通道、程序更新源、端口等）            |
 
 安装包内置内核位于安装目录（`process.resourcesPath/kernel`），首次启动时导入到上面的 `kernel/`，此后更新/回滚均在 `kernel/` 进行。
+安装包内置便携版 Node.js（`process.resourcesPath/node`），系统无 Node 时自动使用内置 Node 运行 dsh 与内核更新。
 
 ---
 

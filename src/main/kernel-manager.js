@@ -450,12 +450,68 @@ class KernelManager {
     };
   }
 
+  /**
+   * 内置 Node 目录（安装包 extraResources: process.resourcesPath/node）
+   * @returns {string|null} 存在返回目录，否则 null
+   */
+  _getBundledNodeDir() {
+    try {
+      const dir = path.join(process.resourcesPath, 'node');
+      const probe = process.platform === 'win32'
+        ? path.join(dir, 'node.exe')
+        : path.join(dir, 'bin', 'node');
+      if (fs.existsSync(probe)) return dir;
+    } catch {}
+    return null;
+  }
+
+  /**
+   * 获取 node 命令：
+   *  系统有 node 用系统（PATH），否则回退内置 Node（安装在 resourcesPath/node）
+   */
   _getNodeCmd() {
+    const bundled = this._getBundledNodeDir();
+    if (bundled) {
+      // 优先用内置（确保版本一致）；系统有 Node 且满足要求时也可用系统，这里统一用内置最稳妥
+      return process.platform === 'win32'
+        ? path.join(bundled, 'node.exe')
+        : path.join(bundled, 'bin', 'node');
+    }
     return process.platform === 'win32' ? 'node.exe' : 'node';
   }
 
+  /**
+   * 获取 npm 命令（配合 node 的路径）
+   * Windows 内置 node 自带 npm.cmd；macOS 为 bin/npm
+   */
   _getNpmCmd() {
+    const bundled = this._getBundledNodeDir();
+    if (bundled) {
+      return process.platform === 'win32'
+        ? path.join(bundled, 'npm.cmd')
+        : path.join(bundled, 'bin', 'npm');
+    }
     return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  }
+
+  /** 是否为内置 Node 路径 */
+  _usingBundledNode() {
+    return !!this._getBundledNodeDir();
+  }
+
+  /**
+   * 子进程环境：若使用内置 Node，将其 bin 目录加入 PATH，
+   * 确保 npm 脚本 / node 子进程能解析到内置 node。
+   */
+  _childEnv() {
+    const env = { ...process.env };
+    const bundled = this._getBundledNodeDir();
+    if (bundled) {
+      const binDir = process.platform === 'win32' ? bundled : path.join(bundled, 'bin');
+      const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+      env[pathKey] = binDir + path.delimiter + (env[pathKey] || '');
+    }
+    return env;
   }
 
   _runVersionCommand(cmd, args) {
@@ -464,6 +520,7 @@ class KernelManager {
         const child = spawn(cmd, args, {
           shell: process.platform === 'win32',
           windowsHide: true,
+          env: this._childEnv(),
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         let out = '';
@@ -633,6 +690,7 @@ class KernelManager {
       const child = spawn(npmCmd, args, {
         shell: process.platform === 'win32',
         windowsHide: true,
+        env: this._childEnv(),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let stdout = '';
@@ -670,6 +728,7 @@ class KernelManager {
         const child = spawn(this._getNodeCmd(), [binPath, '--version'], {
           shell: process.platform === 'win32',
           windowsHide: true,
+          env: this._childEnv(),
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         let out = '';

@@ -39,13 +39,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 打包（内部自动执行 fetch-kernel 预下载内置内核）
+      # 打包（预下载内置内核 + 内置 Node.js）
       # --publish never：禁用 electron-builder 自动上传（需 GH_TOKEN），
       # 产物统一由下方 release job 用 action-gh-release 上传
       - name: Build installer
         shell: bash
         run: |
           npm run fetch-kernel
+          npm run fetch-node
           npx electron-builder ${{ matrix.platform }} --publish never
         env:
           # 内核版本（如需固定可改，缺省 latest）

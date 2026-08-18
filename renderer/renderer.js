@@ -19,7 +19,7 @@ const els = {
   btnOpenSettings: $('#btn-open-settings'),
   // 窗口控制
   winMin: $('#win-min'), winMax: $('#win-max'), winMaxIcon: $('#win-max-icon'), winClose: $('#win-close'),
-  titlebar: $('#titlebar'),
+  titlebar: $('#titlebar'), titlebarControls: $('#titlebar-controls'),
   settingsModal: $('#settings-modal'), settingsBackdrop: $('#settings-backdrop'),
   btnCloseSettings: $('#btn-close-settings'), btnSaveSettings: $('#btn-save-settings'),
   settingsSaveTip: $('#settings-save-tip'), kernelVersionInfo: $('#kernel-version-info'),
@@ -254,21 +254,30 @@ function extractThemeFromWebview() {
 
 // ---------- 事件绑定 ----------
 function bindEvents() {
-  // 窗口控制
-  els.winMin.addEventListener('click', () => api.windowMinimize());
-  els.winMax.addEventListener('click', async () => {
-    const r = await api.windowToggleMaximize();
-    updateMaxIcon(r && r.maximized);
-  });
-  els.winClose.addEventListener('click', () => api.windowClose());
-  async function updateMaxIcon(maximized) {
-    if (!els.winMaxIcon) return;
-    els.winMaxIcon.innerHTML = maximized
-      ? '<path d="M2.5 0.5h7v7h-7z" fill="none" stroke="currentColor"/><path d="M0.5 2.5h7v7h-7z" fill="none" stroke="currentColor"/>'
-      : '<path d="M0.5 0.5h9v9h-9z" fill="none" stroke="currentColor"/>';
+  // 检测平台：mac 使用原生红绿灯按钮，隐藏自绘按钮；Windows/Linux 使用自绘
+  const isMac = navigator.platform.toLowerCase().includes('mac');
+  document.body.setAttribute('data-platform', isMac ? 'mac' : 'win');
+
+  if (isMac) {
+    // mac：保留原生按钮，不绑定自绘窗口控制（避免功能重叠）
+    if (els.titlebarControls) els.titlebarControls.style.display = 'none';
+  } else {
+    // Windows/Linux：自绘窗口控制按钮
+    els.winMin.addEventListener('click', () => api.windowMinimize());
+    els.winMax.addEventListener('click', async () => {
+      const r = await api.windowToggleMaximize();
+      updateMaxIcon(r && r.maximized);
+    });
+    els.winClose.addEventListener('click', () => api.windowClose());
+    async function updateMaxIcon(maximized) {
+      if (!els.winMaxIcon) return;
+      els.winMaxIcon.innerHTML = maximized
+        ? '<path d="M2.5 0.5h7v7h-7z" fill="none" stroke="currentColor"/><path d="M0.5 2.5h7v7h-7z" fill="none" stroke="currentColor"/>'
+        : '<path d="M0.5 0.5h9v9h-9z" fill="none" stroke="currentColor"/>';
+    }
+    // 同步最大化状态
+    api.windowIsMaximized().then((r) => updateMaxIcon(r && r.maximized));
   }
-  // 同步最大化状态
-  api.windowIsMaximized().then((r) => updateMaxIcon(r && r.maximized));
 
   els.btnStart.addEventListener('click', handleStart);
   els.btnStop.addEventListener('click', handleStop);

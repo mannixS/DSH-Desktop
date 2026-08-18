@@ -8,22 +8,26 @@
 </head>
 <body>
 <div class="app">
-  <!-- 自绘标题栏（无边框窗口） -->
+  <!-- 自绘标题栏（无边框窗口；macOS 保留原生红绿灯，此栏自绘按钮会隐藏，logo 居右） -->
   <header class="titlebar" id="titlebar">
-    <div class="titlebar-brand">
-      <img class="titlebar-logo" src="app-logo.png" alt="DSH" />
-      <span class="titlebar-title">DSH Desktop</span>
-    </div>
-    <div class="titlebar-controls">
-      <button class="win-btn" id="win-min" title="最小化">
-        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 4.5h10v1H0z" fill="currentColor"/></svg>
-      </button>
-      <button class="win-btn" id="win-max" title="最大化">
-        <svg id="win-max-icon" width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5h9v9h-9z" fill="none" stroke="currentColor"/></svg>
-      </button>
-      <button class="win-btn win-close" id="win-close" title="关闭">
-        <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.2"/></svg>
-      </button>
+    <!-- 左侧预留 mac 原生红绿灯按钮空间（仅 mac） -->
+    <div class="titlebar-mac-space" id="titlebar-mac-space"></div>
+    <div class="titlebar-title">DSH Desktop</div>
+    <div class="titlebar-right">
+      <div class="titlebar-brand" id="titlebar-brand">
+        <img class="titlebar-logo" src="app-logo.png" alt="DSH" />
+      </div>
+      <div class="titlebar-controls" id="titlebar-controls">
+        <button class="win-btn" id="win-min" title="最小化">
+          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 4.5h10v1H0z" fill="currentColor"/></svg>
+        </button>
+        <button class="win-btn" id="win-max" title="最大化">
+          <svg id="win-max-icon" width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5h9v9h-9z" fill="none" stroke="currentColor"/></svg>
+        </button>
+        <button class="win-btn win-close" id="win-close" title="关闭">
+          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+      </div>
     </div>
   </header>
 

@@ -80,6 +80,7 @@ function bootstrap() {
   }
 
   // ---------------- 窗口 ----------------
+  const isMac = process.platform === 'darwin';
   function createWindow() {
     mainWindow = new BrowserWindow({
       width: 1280,
@@ -87,12 +88,11 @@ function bootstrap() {
       minWidth: 960,
       minHeight: 640,
       title: 'DSH Desktop',
-      // 无边框窗口（去掉标题栏/菜单栏），四周圆角由 CSS + 透明背景实现
-      frame: false,
-      transparent: true,
-      // macOS 也使用无边框
-      titleBarStyle: 'hidden',
-      backgroundColor: '#00000000',
+      // macOS：保留原生红绿灯按钮（在左侧），titleBarStyle hiddenInset 隐藏标题栏文字
+      // Windows/Linux：完全无边框，自绘窗口按钮
+      ...(isMac
+        ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 18 } }
+        : { frame: false, transparent: true, backgroundColor: '#00000000' }),
       webPreferences: {
         preload: path.join(__dirname, '..', 'preload.js'),
         contextIsolation: true,

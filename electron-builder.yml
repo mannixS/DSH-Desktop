@@ -34,6 +34,12 @@ extraResources:
     to: kernel/bundle-info.json
   - from: vendor/kernel.tar.gz
     to: kernel/kernel.tar.gz
+  # 内置 Node.js（系统无 Node 时的兜底运行时，process.resourcesPath/node）
+  - from: vendor/node
+    to: node
+    filter:
+      - '**/*'
+      - '!node_modules/**'
 
 win:
   icon: icon.ico
