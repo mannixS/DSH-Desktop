@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-client",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "DeepSeek Harness (dsh) 跨平台桌面客户端 —— 支持内核版本管理与自动/手动更新",
   "main": "src/main/main.js",
   "author": "DeepSeek Harness Client Team",

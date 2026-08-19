@@ -128,7 +128,9 @@ const EXCLUDES = [
   '*.mts', // TS 源码（ESM）
   '*.cts', // TS 源码（CJS）
   '*/test/*', '*/tests/*', '*/__tests__/*', // 测试
-  '*/docs/*', '*/doc/*', // 文档
+  // 注意：不能排除 */doc/* 与 */docs/* —— yaml 等包在 dist/doc/ 下
+  // 放的是运行时必需的 JS 文件（如 directives.js），排除会导致内核启动即崩
+  // （v1.0.17 及之前因此打出的内置内核损坏，v1.0.18 起保留 doc 目录）。
   '*/examples/*', '*/example/*', // 示例
 ];
 const tarArgs = ['-czf', archiveRel];

@@ -221,10 +221,18 @@ class KernelManager {
       return { imported: false, reason: 'no-bundled-kernel' };
     }
 
-    // 用户目录已安装内核则不覆盖（用户可能已手动更新/回滚）
+    // 用户目录已安装内核：
+    //  - 可运行（dsh --version 通过）→ 不覆盖（用户可能已手动更新/回滚）
+    //  - 已安装但无法运行（如历史版本的损坏归档导入）→ 清理后用内置内核自动修复
     const local = await this.getLocalKernelInfo();
     if (local.installed) {
-      return { imported: false, reason: 'already-installed', version: local.version };
+      const runnable = await this._verifyKernelRunnable(this.kernelDir);
+      if (runnable) {
+        return { imported: false, reason: 'already-installed', version: local.version };
+      }
+      this.logger.warn(`本地内核 v${local.version} 无法运行（可能导入不完整），将使用内置内核自动修复...`);
+      progress(`检测到本地内核损坏，正在使用内置内核 v${bundled.version} 修复...`);
+      await this._rmrf(this.kernelDir);
     }
 
     const archivePath = path.join(bundled.dir, 'kernel.tar.gz');
