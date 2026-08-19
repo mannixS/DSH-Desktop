@@ -136,17 +136,29 @@ function bootstrap() {
         preload: path.join(__dirname, '..', 'preload.js'),
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
+        // preload 仅使用 electron 内置模块，开启沙箱提升安全性
+        sandbox: true,
         webviewTag: true,
       },
     });
 
     mainWindow.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
 
-    // 外链交给系统浏览器
+    // 外链交给系统浏览器（含 dsh webview 的 guest 页面）
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
       shell.openExternal(url);
       return { action: 'deny' };
+    });
+
+    // 拦截所有 webContents（含 webview 内嵌页面）的 window.open：
+    // webview 的外链也交给系统浏览器，避免开出裸的 Electron 窗口
+    app.on('web-contents-created', (_event, contents) => {
+      if (contents.getType() === 'webview') {
+        contents.setWindowOpenHandler(({ url }) => {
+          if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+          return { action: 'deny' };
+        });
+      }
     });
 
     mainWindow.on('closed', () => {
@@ -192,11 +204,20 @@ function bootstrap() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update:install-start');
     }
+    // 记录更新前 dsh 是否在运行：更新前必须停止（Windows 下文件占用会导致
+    // 内核目录备份/替换失败，甚至损坏现役内核），更新成功后再恢复运行
+    let wasRunning = false;
     try {
       const channel = settings.get('updateChannel');
       const info = await kernelManager.checkForUpdates(channel);
       if (!info.hasUpdate) {
         return { ok: false, reason: 'no-update' };
+      }
+      if (dshHost.running) {
+        wasRunning = true;
+        pushLog('[update]', '更新前先停止 dsh 服务，以安全替换内核目录...');
+        notifyRenderer('update:install-progress', '正在停止 dsh 服务以安全更新内核...');
+        await dshHost.stop({ force: true });
       }
       const remote = info.remote;
       const result = await kernelManager.installKernel(remote, {
@@ -210,13 +231,22 @@ function bootstrap() {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('update:install-done', result);
       }
-      // 若 dsh 正在运行，更新后自动重启以应用新内核
-      if (dshHost.running) {
-        pushLog('[update]', '检测到 dsh 正在运行，自动重启以应用新内核...');
-        await dshHost.restart({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
+      // 更新前 dsh 在运行：自动重启以应用新内核
+      if (wasRunning) {
+        pushLog('[update]', '内核更新完成，自动重启 dsh 以应用新内核...');
+        await dshHost.start({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
       }
       return { ok: true, version: result.version };
     } catch (err) {
+      // 更新失败但更新前 dsh 在运行：尝试恢复运行旧内核
+      if (wasRunning && !dshHost.running) {
+        pushLog('[update]', '更新失败，尝试恢复运行原内核...');
+        try {
+          await dshHost.start({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
+        } catch (startErr) {
+          pushLog('[update]', '恢复 dsh 运行失败: ' + startErr.message);
+        }
+      }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('update:install-error', err.message);
       }
@@ -253,9 +283,21 @@ function bootstrap() {
   }
 
   // ---------------- 状态快照 ----------------
+  // Node 环境检测需 spawn 子进程，且环境基本不变——缓存 5 分钟，
+  // 避免渲染层 15s 轮询 status:get 时反复拉起 node/npm 进程
+  let nodeEnvCache = { data: null, at: 0 };
+  async function getNodeEnv() {
+    if (nodeEnvCache.data && Date.now() - nodeEnvCache.at < 5 * 60 * 1000) {
+      return nodeEnvCache.data;
+    }
+    const env = await kernelManager.detectNodeEnvironment();
+    nodeEnvCache = { data: env, at: Date.now() };
+    return env;
+  }
+
   async function getStatusSnapshot() {
     const local = await kernelManager.getLocalKernelInfo();
-    const env = await kernelManager.detectNodeEnvironment();
+    const env = await getNodeEnv();
     const bundled = await kernelManager.getBundledKernelInfo();
     return {
       appVersion: app.getVersion(),
@@ -334,11 +376,16 @@ function bootstrap() {
     ipcMain.handle('settings:get', async () => settings.data);
 
     ipcMain.handle('settings:update', async (_e, patch) => {
+      const prevPort = Number(settings.get('dshPort'));
       const updated = await settings.update(patch);
       // 间隔变化时重排自动检查
       if (patch.checkIntervalMinutes !== undefined) scheduleAutoCheck();
-      // 端口变化时若 dsh 在运行，提示重启
-      return updated;
+      // 端口变化且 dsh 运行中：标记需要重启，由渲染层提示并触发重启
+      const dshNeedsRestart =
+        patch.dshPort !== undefined &&
+        Number(patch.dshPort) !== prevPort &&
+        dshHost.running;
+      return { ...updated, dshNeedsRestart };
     });
 
     ipcMain.handle('logs:get', async () => logBuffer);
@@ -346,6 +393,15 @@ function bootstrap() {
     ipcMain.handle('env:openNodeDownload', async () => {
       shell.openExternal('https://nodejs.org/zh-cn/download');
       return { ok: true };
+    });
+
+    // webview / 渲染层的外链统一交给系统浏览器（仅允许 http/https）
+    ipcMain.handle('shell:openExternal', (_e, url) => {
+      if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+        shell.openExternal(url);
+        return { ok: true };
+      }
+      return { ok: false, error: 'invalid-url' };
     });
 
     ipcMain.handle('kernel:remove', async () => {

@@ -20,6 +20,8 @@ const DEFAULTS = {
   autoInstall: false,
   // dsh Web UI 端口
   dshPort: 3080,
+  // 外观主题：'auto' 跟随 dsh web ui / 'system' 跟随系统 / 'dark' / 'light'
+  themeMode: 'auto',
   // dsh 启动参数（数组，如 ['web']）
   dshMode: 'web',
   // 应用启动后自动运行 dsh（有内核时），使主页直接呈现工作台

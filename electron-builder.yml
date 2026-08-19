@@ -22,10 +22,6 @@ files:
   - renderer/**/*
   - package.json
 
-# 排除内核目录与开发依赖（内核在运行时按需安装到用户数据目录）
-asarUnpack:
-  - resources/**
-
 # 内置内核：打包前由 `npm run fetch-kernel` 生成单文件归档 vendor/kernel.tar.gz，
 # 安装后位于 process.resourcesPath/kernel，首启由客户端解压导入用户数据目录。
 # 采用单文件归档可避免 NSIS 对 3 万+ 小文件逐个解压导致的安装缓慢。

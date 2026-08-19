@@ -8,10 +8,14 @@ vendor/node-download/
 
 # Build output
 dist/
+dist16/
 out/
 build/*
 !build/icons/
 !build/icons/**
+
+# Local-only docs（本地开发文档，不上传仓库）
+README.local.md
 
 # Logs
 *.log

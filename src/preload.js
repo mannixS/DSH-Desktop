@@ -38,6 +38,8 @@ const api = {
 
   // ---------- 系统 ----------
   openNodeDownload: () => ipcRenderer.invoke('env:openNodeDownload'),
+  // 外链交给系统浏览器（仅 http/https，主进程校验）
+  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
 
   // ---------- 客户端自身程序自动更新 ----------
   checkAppUpdate: () => ipcRenderer.invoke('app-update:check'),

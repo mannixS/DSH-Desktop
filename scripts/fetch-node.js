@@ -82,13 +82,21 @@ async function main() {
   fs.mkdirSync(outDir, { recursive: true });
 
   if (isWin) {
-    // Windows：用 PowerShell Expand-Archive 解压（spawnSync 数组传参，避免引号丢失）
-    const ps = spawnSync('powershell', ['-NoProfile', '-Command',
-      `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${outDir}' -Force`],
+    // Windows：优先用系统自带 bsdtar 解压 zip（比 PowerShell Expand-Archive 快一个量级），
+    // 失败（老系统无 tar 等）再回退 Expand-Archive。
+    // 注意：tar -f 参数使用相对路径并以 outDir 为 cwd，
+    // 规避 bsdtar 把 "C:\..." 盘符误判为远程主机的问题。
+    const archiveRel = path.relative(outDir, archivePath);
+    const tar = spawnSync('tar', ['-x', '-f', archiveRel], { encoding: 'utf8', cwd: outDir, stdio: 'pipe' });
+    if (tar.status !== 0) {
+      console.log('~ tar 解压不可用，回退 PowerShell Expand-Archive（较慢）...');
+      const ps = spawnSync('powershell', ['-NoProfile', '-Command',
+        `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${outDir}' -Force`],
       { encoding: 'utf8', cwd: outDir });
-    if (ps.status !== 0) {
-      console.error('✗ zip 解压失败: ' + ((ps.stderr || '').trim() || (ps.stdout || '').trim() || 'unknown'));
-      process.exit(1);
+      if (ps.status !== 0) {
+        console.error('✗ zip 解压失败: ' + ((ps.stderr || '').trim() || (ps.stdout || '').trim() || 'unknown'));
+        process.exit(1);
+      }
     }
     // 将 node-vXX-win-x64 顶层目录内容上移到 outDir
     const inner = fs.readdirSync(outDir).find((n) => n.startsWith('node-v') && fs.statSync(path.join(outDir, n)).isDirectory());

@@ -357,31 +357,11 @@ class KernelManager {
 
   /**
    * 查询 npm registry 中 dsh 的远端版本信息
+   * 统一拉取全量 packument（/latest 端点不含 time 字段，无法取得发布时间）
    * @param {string} [channel='latest'] 'latest' | 'stable'
    * @returns {Promise<{ channel: string, version: string|null, publishedAt: string|null, distTags: object }>}
    */
   async fetchRemoteVersion(channel = 'latest') {
-    // stable 通道需要全量版本列表，latest 只需要 latest 端点
-    if (channel === 'stable') {
-      return this._fetchRemoteStable();
-    }
-    const res = await fetch(`${REGISTRY_BASE}/${DSH_PACKAGE}/latest`, {
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) {
-      throw new Error(`npm registry 请求失败 (HTTP ${res.status})`);
-    }
-    const data = await res.json();
-    return {
-      channel: 'latest',
-      version: data.version || null,
-      publishedAt: data.time ? data.time[data.version] || null : null,
-      distTags: { latest: data.version || null },
-    };
-  }
-
-  /** 从全量版本列表中选择最高正式版本（stable 通道） */
-  async _fetchRemoteStable() {
     const res = await fetch(`${REGISTRY_BASE}/${DSH_PACKAGE}`, {
       signal: AbortSignal.timeout(20000),
     });
@@ -389,19 +369,25 @@ class KernelManager {
       throw new Error(`npm registry 请求失败 (HTTP ${res.status})`);
     }
     const data = await res.json();
-    const versions = Object.keys(data.versions || {});
-    const stable = versions.filter((v) => this.isStableVersion(v));
-    const pick = stable.length > 0 ? stable : versions; // 无正式版则退回到全部版本
-    let best = null;
-    for (const v of pick) {
-      if (!best || this.compareVersions(v, best) > 0) best = v;
-    }
     const time = data.time || {};
+    const distTags = data['dist-tags'] || {};
+    let version = null;
+    if (channel === 'stable') {
+      // stable 通道：全量版本中选最高正式版（无正式版则退回全部版本）
+      const versions = Object.keys(data.versions || {});
+      const stable = versions.filter((v) => this.isStableVersion(v));
+      const pick = stable.length > 0 ? stable : versions;
+      for (const v of pick) {
+        if (!version || this.compareVersions(v, version) > 0) version = v;
+      }
+    } else {
+      version = distTags.latest || null;
+    }
     return {
-      channel: 'stable',
-      version: best,
-      publishedAt: best ? time[best] || null : null,
-      distTags: data['dist-tags'] || { latest: best },
+      channel,
+      version,
+      publishedAt: version ? time[version] || null : null,
+      distTags,
     };
   }
 
@@ -545,16 +531,20 @@ class KernelManager {
         });
         let out = '';
         child.stdout.on('data', (d) => (out += d.toString()));
-        child.on('error', () => resolve(null));
-        child.on('close', (code) => {
-          resolve(code === 0 ? out.trim() : null);
-        });
-        setTimeout(() => {
+        const timer = setTimeout(() => {
           try {
             child.kill();
           } catch {}
           resolve(null);
         }, 10000);
+        child.on('error', () => {
+          clearTimeout(timer);
+          resolve(null);
+        });
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          resolve(code === 0 ? out.trim() : null);
+        });
       } catch {
         resolve(null);
       }
@@ -630,7 +620,7 @@ class KernelManager {
       throw new Error(`内核 ${installedVersion} 启动校验失败，已中止安装。`);
     }
 
-    // 4. 备份旧内核
+    // 4. 备份旧内核（失败则中止更新：保留现役内核不被破坏，回滚能力不受影响）
     const oldInfo = await this.getLocalKernelInfo();
     await this._rmrf(this.backupDir);
     if (oldInfo.installed) {
@@ -638,7 +628,11 @@ class KernelManager {
         await fsp.rename(this.kernelDir, this.backupDir);
         progress(`已备份旧内核 (${oldInfo.version})`);
       } catch (err) {
-        this.logger.warn(`备份旧内核失败（继续安装）: ${err.message}`);
+        await this._rmrf(this.tmpDir);
+        throw new Error(
+          `备份旧内核失败，已中止更新（当前内核 v${oldInfo.version} 保持不变）。` +
+            `常见原因：dsh 正在运行占用文件，请停止 dsh 后重试。详情: ${err.message}`
+        );
       }
     }
 
@@ -805,17 +799,21 @@ class KernelManager {
         });
         let out = '';
         child.stdout.on('data', (d) => (out += d.toString()));
-        child.on('error', () => resolve(false));
-        child.on('close', (code) => {
-          // dsh 成功输出版本号即视为可运行；部分版本 --version 可能返回非 0 但正常输出
-          resolve(code === 0 || out.trim().length > 0);
-        });
-        setTimeout(() => {
+        const timer = setTimeout(() => {
           try {
             child.kill();
           } catch {}
           resolve(false);
         }, 20000);
+        child.on('error', () => {
+          clearTimeout(timer);
+          resolve(false);
+        });
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          // dsh 成功输出版本号即视为可运行；部分版本 --version 可能返回非 0 但正常输出
+          resolve(code === 0 || out.trim().length > 0);
+        });
       } catch {
         resolve(false);
       }

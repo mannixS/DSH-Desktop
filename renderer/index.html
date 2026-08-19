@@ -49,7 +49,8 @@
       <div class="card-actions"><button class="btn btn-primary" id="btn-stage-retry">重试</button></div>
     </div>
     <div class="stage-frame hidden" id="stage-frame">
-      <webview id="dsh-webview" src="about:blank" allowpopups></webview>
+      <!-- 不加 allowpopups：dsh 内的 window.open 由渲染层接管后转系统浏览器，防止开裸的 Electron 窗口 -->
+      <webview id="dsh-webview" src="about:blank"></webview>
     </div>
   </main>
 
@@ -79,6 +80,19 @@
       <button class="btn btn-sm" id="btn-close-settings">关闭</button>
     </header>
     <div class="modal-body">
+      <section class="card">
+        <h3>外观</h3>
+        <div class="setting-row">
+          <div><label class="setting-label">主题模式</label><p class="muted">跟随 dsh：web ui 切换深浅色时客户端同步</p></div>
+          <select class="input-select" id="set-theme">
+            <option value="auto">跟随 dsh</option>
+            <option value="system">跟随系统</option>
+            <option value="dark">深色</option>
+            <option value="light">浅色</option>
+          </select>
+        </div>
+      </section>
+
       <section class="card">
         <h3>内核更新</h3>
         <div class="setting-row">

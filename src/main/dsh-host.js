@@ -74,6 +74,8 @@ class DshHost {
       this.logger.warn('dsh 已在运行，忽略重复启动');
       return { ok: false, reason: 'already-running' };
     }
+    // 每次启动重新解析端口，避免残留上次会话的 resolvedPort
+    this.resolvedPort = null;
 
     const portNum = port || this.port;
     const binPath = this.dshBinPath;
@@ -82,8 +84,9 @@ class DshHost {
       this.events.onError?.('内核未安装，请先安装 DeepSeek Harness 内核。');
       return { ok: false, reason: 'kernel-not-installed' };
     }
-    // 触发状态变化（启动中）
-    this.events.onStateChange?.(this.status);
+    // 注意：此处不要推送 onStateChange——此时 running 仍为 false，
+    // 推送会被渲染层当作"已停止"处理（重新启用启动按钮、回到空态），
+    // 撤销用户点击瞬间的反馈。等 spawn 成功、running=true 后再推送"启动中"。
 
     // 端口占用检测：若目标端口被其他进程占用（非本客户端管理的 dsh），
     // 不杀掉外部进程（危险），而是自动更换可用端口，避免 dsh 启动失败（EADDRINUSE）。
@@ -148,6 +151,8 @@ class DshHost {
     this.stopping = false;
     this.port = this.resolvedPort || portNum;
     this._startPortProbe(this.port);
+    // 进程已拉起：立即推送 running=true，渲染层马上显示"启动中"并禁用启动按钮
+    this.events.onStateChange?.(this.status);
 
     this.child.stdout.on('data', (d) => {
       const lines = d.toString().split(/\r?\n/).filter(Boolean);
@@ -178,6 +183,7 @@ class DshHost {
       this.logger.info(`dsh 进程退出 (code=${code}, signal=${signal})`);
       this.running = false;
       this.child = null;
+      this.resolvedPort = null;
       this.events.onExit?.(code);
       this.events.onStateChange?.(this.status);
       // 诊断：非主动停止的意外退出，把 dsh 自身 stderr 报错附带到 reason，便于用户定位
@@ -239,6 +245,8 @@ class DshHost {
   stop({ force = false, timeout = 4000 } = {}) {
     if (!this.child) {
       this.running = false;
+      this.stopping = false;
+      this.resolvedPort = null;
       return Promise.resolve({ ok: true, alreadyStopped: true });
     }
     this.stopping = true;
@@ -248,6 +256,8 @@ class DshHost {
       const done = () => {
         this.running = false;
         this.child = null;
+        this.stopping = false;
+        this.resolvedPort = null;
         resolve({ ok: true });
       };
 
@@ -357,12 +367,16 @@ class DshHost {
   cleanupResidual() {
     try {
       const { execSync } = require('child_process');
-      const kernelMarker = this.kernelDir.replace(/\\/g, '/');
+      // 匹配用的标记：统一为正斜杠，并剔除引号/反引号，避免注入命令行
+      const kernelMarker = this.kernelDir.replace(/\\/g, '/').replace(/['"`]/g, '');
       const isWin = process.platform === 'win32';
       if (isWin) {
-        // wmic 已弃用，用 powershell Get-CimInstance 查询进程命令行
+        // wmic 已弃用，用 powershell Get-CimInstance 查询进程命令行。
+        // 注意：Windows 进程命令行是反斜杠路径，必须先把 CommandLine 归一化成
+        // 正斜杠再与 kernelMarker 匹配，否则永远匹配不到。
+        // 限定 node.exe 缩小范围，避免误杀其他进程。
         const ps = execSync(
-          `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${kernelMarker}*' } | ForEach-Object { $_.ProcessId }"`,
+          `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -and (($_.CommandLine -replace '\\\\','/') -like '*${kernelMarker}*') } | ForEach-Object { $_.ProcessId }"`,
           { encoding: 'utf8', windowsHide: true }
         );
         for (const line of ps.split(/\r?\n/)) {
@@ -374,7 +388,7 @@ class DshHost {
         }
       } else {
         // macOS/Linux: ps + grep 命令行
-        const ps = execSync(`ps -eo pid,command | grep -F '${kernelMarker}' | grep -v grep`, { encoding: 'utf8' });
+        const ps = execSync(`ps -eo pid,command | grep -F -- '${kernelMarker}' | grep -v grep`, { encoding: 'utf8' });
         for (const line of ps.split(/\n/)) {
           const m = line.trim().match(/^\s*(\d+)/);
           if (m && m[1]) {
