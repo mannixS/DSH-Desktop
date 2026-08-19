@@ -140,6 +140,32 @@ async function main() {
     process.exit(1);
   }
 
+  // 3.5 macOS：将 node/ 内所有符号链接替换为 wrapper shell 脚本
+  // 原因：Node.js 发行版 bin/npm、bin/npx 等是指向 ../lib/... 的软链接，
+  // electron-builder 签名时把软链接写入 CodeResources；Squirrel.Mac 自动更新
+  // 解压 zip 时软链接会丢失/损坏，导致签名校验失败（"代码不含资源，但签名
+  // 指示这些资源必须存在"）。替换为等价的 shell 脚本（普通文件）可彻底规避。
+  if (!isWin) {
+    let replaced = 0;
+    const replaceSymlinks = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isSymbolicLink()) {
+          const target = fs.readlinkSync(full);
+          fs.unlinkSync(full);
+          // wrapper 脚本：等价于软链接，exec 到真实目标（target 是相对路径）
+          const wrapper = `#!/bin/sh\nexec "$(dirname "$0")/${target}" "$@"\n`;
+          fs.writeFileSync(full, wrapper, { mode: 0o755 });
+          replaced++;
+        } else if (entry.isDirectory()) {
+          replaceSymlinks(full);
+        }
+      }
+    };
+    replaceSymlinks(outDir);
+    if (replaced > 0) console.log(`✓ 已将 ${replaced} 个符号链接替换为 wrapper 脚本（修复 macOS 自动更新签名校验）`);
+  }
+
   // 4. 写入版本信息
   fs.writeFileSync(
     INFO_FILE,
