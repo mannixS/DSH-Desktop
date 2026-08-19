@@ -41,7 +41,10 @@ win:
     - target: nsis
       arch:
         - x64
-  artifactName: ${productName}-${version}-win-${arch}.${ext}
+  # 注意：artifactName 必须用无空格字面量。productName 含空格（DSH Desktop）时，
+  # electron-builder 生成实际文件名与 latest*.yml 更新清单的空格替换规则不一致
+  # （文件名替换为 "."，清单替换为 "-"），导致自更新按清单下载 404。
+  artifactName: DSH-Desktop-${version}-win-${arch}.${ext}
 
 nsis:
   oneClick: false
@@ -68,7 +71,8 @@ mac:
         - arm64
         - x64
   category: public.app-category.developer-tools
-  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  # 同 win.artifactName 说明：无空格字面量，保证产物名与 latest-mac.yml 一致
+  artifactName: DSH-Desktop-${version}-mac-${arch}.${ext}
   notarize: false
 
 npmRebuild: false

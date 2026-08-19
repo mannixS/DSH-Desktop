@@ -84,9 +84,9 @@ jobs:
             DeepSeek Harness 跨平台桌面客户端，内置 dsh 内核，支持内核一键更新与回滚。
 
             ### 安装包
-            - Windows x64：`DSH Desktop-*-win-x64.exe`
-            - macOS（Apple Silicon）：`DSH Desktop-*-mac-arm64.zip`（解压后把 DSH Desktop.app 拖入"应用程序"）
-            - macOS（Intel）：`DSH Desktop-*-mac-x64.zip`（解压后把 DSH Desktop.app 拖入"应用程序"）
+            - Windows x64：`DSH-Desktop-*-win-x64.exe`
+            - macOS（Apple Silicon）：`DSH-Desktop-*-mac-arm64.zip`（解压后把 DSH Desktop.app 拖入"应用程序"）
+            - macOS（Intel）：`DSH-Desktop-*-mac-x64.zip`（解压后把 DSH Desktop.app 拖入"应用程序"）
           files: dist/*
           generate_release_notes: true
         env:
