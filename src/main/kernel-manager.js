@@ -437,7 +437,14 @@ class KernelManager {
    */
   async detectNodeEnvironment() {
     const nodeVersion = await this._runVersionCommand(this._getNodeCmd(), ['--version']);
-    const npmVersion = await this._runVersionCommand(this._getNpmCmd(), ['--version']);
+    // npm 检测：优先 node + npm-cli.js（兼容含空格路径），回退 npm.cmd
+    let npmVersion = null;
+    const npmCli = this._getNpmCliPath();
+    if (npmCli) {
+      npmVersion = await this._runVersionCommand(this._getNodeCmd(), [npmCli, '--version']);
+    } else {
+      npmVersion = await this._runVersionCommand(this._getNpmCmd(), ['--version']);
+    }
     const parsed = this._parseVersion(nodeVersion || '');
     return {
       nodeAvailable: !!nodeVersion,
@@ -448,6 +455,17 @@ class KernelManager {
       minimum: MIN_NODE_MAJOR,
       recommended: RECOMMEND_NODE_MAJOR,
     };
+  }
+
+  /**
+   * 获取 npm-cli.js 的完整路径（内置 Node 时）
+   * @returns {string|null}
+   */
+  _getNpmCliPath() {
+    const bundled = this._getBundledNodeDir();
+    if (!bundled) return null;
+    const cli = path.join(bundled, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    return fs.existsSync(cli) ? cli : null;
   }
 
   /**
@@ -517,8 +535,10 @@ class KernelManager {
   _runVersionCommand(cmd, args) {
     return new Promise((resolve) => {
       try {
+        // 注意：绝对路径可能含空格（如 "Program Files"、用户名带空格），
+        // 必须用 shell:false + 数组传参，否则 shell 拼接命令时路径被拆断
         const child = spawn(cmd, args, {
-          shell: process.platform === 'win32',
+          shell: false,
           windowsHide: true,
           env: this._childEnv(),
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -676,23 +696,40 @@ class KernelManager {
   /** 在指定目录执行 npm install */
   _runNpmInstall(prefixDir, version, progress) {
     return new Promise((resolve, reject) => {
-      const npmCmd = this._getNpmCmd();
+      // 用 node 直接执行 npm 的 cli.js，彻底避开 .cmd/shell 及空格路径问题：
+      // Windows 上 npm.cmd 是 .cmd 脚本，若其绝对路径含空格（如 "DSH Desktop" 目录），
+      // spawn 经 shell 拼接会失败。直接用 node 运行 npm-cli.js 最稳妥。
+      const nodeCmd = this._getNodeCmd();
+      const npmCli = this._getNpmCliPath(); // 内置 Node 时返回 npm-cli.js 路径
       const args = [
         'install',
         '--prefix', prefixDir,
         '--no-audit',
         '--no-fund',
         '--no-update-notifier',
-        '--loglevel=notice',
+        '--loglevel=verbose',
         `${DSH_PACKAGE}@${version}`,
       ];
-      this.logger.info(`执行: ${npmCmd} ${args.join(' ')}`);
-      const child = spawn(npmCmd, args, {
-        shell: process.platform === 'win32',
-        windowsHide: true,
-        env: this._childEnv(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      // 组装：优先 node + npm-cli.js；无内置时回退 npm.cmd（shell:false，Node 会自动处理 .cmd）
+      let child;
+      if (npmCli) {
+        this.logger.info(`执行: ${nodeCmd} ${npmCli} ${args.join(' ')}`);
+        child = spawn(nodeCmd, [npmCli, ...args], {
+          shell: false,
+          windowsHide: true,
+          env: this._childEnv(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } else {
+        const npmCmd = this._getNpmCmd();
+        this.logger.info(`执行: ${npmCmd} ${args.join(' ')}`);
+        child = spawn(npmCmd, args, {
+          shell: false,
+          windowsHide: true,
+          env: this._childEnv(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      }
       let stdout = '';
       let stderr = '';
       // 心跳：npm 下载大包时可能长时间无输出，定期提示"仍在下载"，避免用户误以为卡死
@@ -707,19 +744,23 @@ class KernelManager {
       const emitLine = (raw) => {
         const text = (raw || '').trim();
         if (!text) return;
-        // 解析 npm 进度关键行，转换为友好的进度提示
-        const m = text.match(/^(\d+)\/(\d+)/);
-        if (m) {
-          const pct = Math.round((parseInt(m[1], 10) / parseInt(m[2], 10)) * 100);
-          if (typeof progress === 'function') progress(`正在下载内核依赖… ${pct}%`);
+        // 解析 npm verbose 输出，转换为阶段化进度提示
+        if (/^npm http fetch GET/.test(text) || /^npm http fetch POST/.test(text)) {
+          // 下载请求 → 下载中阶段（不逐条刷屏，靠心跳节流）
+          progress('正在下载内核依赖…（阶段 1/3：下载）');
+        } else if (/^npm http fetch 200|^npm http fetch 304/.test(text)) {
+          progress('正在下载内核依赖…（阶段 1/3：下载）');
+        } else if (/^npm timing reify|^npm warn reify|reify:/.test(text)) {
+          progress('正在安装内核依赖…（阶段 2/3：安装）');
         } else if (/^added \d+ packages/.test(text)) {
-          if (typeof progress === 'function') progress(text);
+          progress(text + '（阶段 3/3：完成）');
         } else if (/^up to date/.test(text)) {
-          if (typeof progress === 'function') progress(text);
-        } else if (/^npm notice/.test(text)) {
-          // 忽略 notice 行，避免刷屏
+          progress(text);
+        } else if (/^npm notice|^npm timing|^npm verbose/.test(text)) {
+          // 忽略 notice/timing/verbose 噪音
         } else {
-          if (typeof progress === 'function') progress(text);
+          // 其他行（如错误）也透传
+          progress(text);
         }
         lastProgress = Date.now();
       };
@@ -757,7 +798,7 @@ class KernelManager {
       const binPath = path.join(kernelDir, 'node_modules', DSH_PACKAGE, 'lib', 'bin.js');
       try {
         const child = spawn(this._getNodeCmd(), [binPath, '--version'], {
-          shell: process.platform === 'win32',
+          shell: false,
           windowsHide: true,
           env: this._childEnv(),
           stdio: ['ignore', 'pipe', 'pipe'],

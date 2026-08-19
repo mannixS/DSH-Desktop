@@ -32,12 +32,58 @@ const els = {
   setAppAutoCheck: $('#set-app-auto-check'), btnCheckAppUpdate: $('#btn-check-app-update'),
   btnDownloadAppUpdate: $('#btn-download-app-update'), appUpdateResult: $('#app-update-result'),
   btnRemoveKernel: $('#btn-remove-kernel'),
+  // 运行日志
+  btnOpenLogs: $('#btn-open-logs'), logsModal: $('#logs-modal'), logsBackdrop: $('#logs-backdrop'),
+  btnCloseLogs: $('#btn-close-logs'), btnCopyLog: $('#btn-copy-log'), btnClearLog: $('#btn-clear-log'),
+  logOutput: $('#log-output'),
 };
+
+// 运行日志状态：滚动保留最近 500 条，实时追加
+let logCache = [];
+function appendLogLine(line) {
+  logCache.push(line);
+  if (logCache.length > 500) logCache.shift();
+  if (!els.logOutput) return;
+  if (els.logOutput.textContent === '（暂无日志）') els.logOutput.textContent = '';
+  // 错误/警告行着色
+  const wrapped = /error|失败|异常|✗|Cannot|Unable/i.test(line)
+    ? '<span class="log-err"></span>' + escapeHtml(line)
+    : (/warn|警告|WARN/i.test(line) ? '<span class="log-warn"></span>' + escapeHtml(line) : escapeHtml(line));
+  els.logOutput.innerHTML += wrapped + '\n';
+  els.logOutput.scrollTop = els.logOutput.scrollHeight;
+}
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+async function refreshLogs() {
+  try {
+    const logs = await api.getLogs();
+    logCache = logs || [];
+    renderLogCache();
+  } catch {}
+}
+function renderLogCache() {
+  if (!els.logOutput) return;
+  els.logOutput.textContent = logCache.length ? logCache.join('\n') : '（暂无日志）';
+  els.logOutput.scrollTop = els.logOutput.scrollHeight;
+}
+function openLogs() {
+  els.logsModal.classList.remove('hidden');
+  refreshLogs();
+}
+function closeLogs() { els.logsModal.classList.add('hidden'); }
 
 let currentSettings = null;
 let lastAppUpdateInfo = null;
 let wsReady = false;
 let lastDshPort = 3080;
+// 内核更新操作锁：检查/安装互斥，进行中禁用所有更新按钮，防止重复点击
+let updateBusy = false;
+
+function setUpdateButtonsDisabled(disabled) {
+  els.btnCheckUpdate.disabled = disabled || updateBusy;
+  els.btnInstallUpdate.disabled = disabled || updateBusy || !currentSettings || !currentSettings.kernelInstalled;
+}
 
 function setDot(c) { els.statusDot.className = 'dot ' + c; }
 function setStatus(t, c) { els.statusText.textContent = t; if (c) setDot(c); }
@@ -75,7 +121,7 @@ function applyDshState(dsh) {
 async function refreshStatus() {
   try {
     const s = await api.getStatus();
-    currentSettings = s.settings;
+    currentSettings = { ...s.settings, kernelInstalled: !!s.kernel.installed };
     lastDshPort = (s.settings && s.settings.dshPort) || 3080;
     applySettingsToForm();
     els.statusVersion.textContent = 'v' + s.appVersion;
@@ -83,7 +129,8 @@ async function refreshStatus() {
     els.nodeVersion.textContent = s.nodeEnv.nodeAvailable ? s.nodeEnv.nodeVersion : '未检测到';
     els.npmVersion.textContent = s.nodeEnv.npmAvailable ? s.nodeEnv.npmVersion : '不可用';
     els.btnOpenNodeDownload.hidden = !(s.nodeEnv && !s.nodeEnv.meetsRequirement);
-    els.btnInstallUpdate.disabled = !s.kernel.installed;
+    // 更新按钮状态由锁统一管理（更新进行中保持禁用）
+    setUpdateButtonsDisabled(false);
     applyDshState(s.dsh);
   } catch {
     setStatus('状态获取失败', 'red');
@@ -134,25 +181,40 @@ function showToast(t, text, ms) {
 }
 
 async function handleCheckUpdate() {
-  els.btnCheckUpdate.disabled = true; els.btnCheckUpdate.textContent = '检查中…';
+  if (updateBusy) return; // 更新进行中，忽略
+  updateBusy = true;
+  setUpdateButtonsDisabled(true);
+  els.btnCheckUpdate.textContent = '检查中…';
   try {
     const ch = (currentSettings && currentSettings.updateChannel) || 'latest';
     const res = await api.checkUpdate(ch);
     if (!res.ok) showToast('error', '检查失败：' + (res.error || ''));
-    else if (res.hasUpdate) { showToast('info', '发现新版本 ' + res.remote); els.btnInstallUpdate.disabled = false; }
+    else if (res.hasUpdate) { showToast('info', '发现新版本 ' + res.remote + '，点击「更新内核」升级。'); }
     else showToast('info', res.local ? '已是最新版本（' + res.local + '）。' : '未安装内核。');
   } catch (err) { showToast('error', '检查更新失败：' + err.message); }
-  finally { els.btnCheckUpdate.disabled = false; els.btnCheckUpdate.textContent = '检查更新'; }
+  finally {
+    updateBusy = false;
+    els.btnCheckUpdate.textContent = '检查更新';
+    setUpdateButtonsDisabled(false);
+    refreshStatus();
+  }
 }
 
 async function handleInstallUpdate() {
-  els.btnInstallUpdate.disabled = true; showToast('info', '正在安装内核更新…');
+  if (updateBusy) return; // 更新进行中，忽略
+  updateBusy = true;
+  setUpdateButtonsDisabled(true);
+  showToast('info', '正在安装内核更新…');
   try {
     const res = await api.installUpdate();
     if (res && res.ok) showToast('ok', '内核已更新至 v' + res.version);
     else showToast('error', '更新失败：' + ((res && (res.error || res.reason)) || '未知'));
   } catch (err) { showToast('error', '更新失败：' + err.message); }
-  finally { els.btnInstallUpdate.disabled = false; refreshStatus(); }
+  finally {
+    updateBusy = false;
+    setUpdateButtonsDisabled(false);
+    refreshStatus();
+  }
 }
 
 function setAppUpdateResult(t, text) {
@@ -285,6 +347,22 @@ function bindEvents() {
   els.btnOpenSettings.addEventListener('click', openSettings);
   els.btnCloseSettings.addEventListener('click', closeSettings);
   els.settingsBackdrop.addEventListener('click', closeSettings);
+  // 运行日志
+  els.btnOpenLogs.addEventListener('click', openLogs);
+  els.btnCloseLogs.addEventListener('click', closeLogs);
+  els.logsBackdrop.addEventListener('click', closeLogs);
+  els.btnClearLog.addEventListener('click', () => {
+    logCache = [];
+    if (els.logOutput) els.logOutput.textContent = '（暂无日志）';
+  });
+  els.btnCopyLog.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(logCache.join('\n'));
+      showToast('info', '日志已复制到剪贴板');
+    } catch {
+      showToast('error', '复制失败');
+    }
+  });
   els.btnStageRetry.addEventListener('click', handleStart);
   els.btnCheckUpdate.addEventListener('click', handleCheckUpdate);
   els.btnInstallUpdate.addEventListener('click', handleInstallUpdate);
@@ -326,6 +404,14 @@ function bindEvents() {
   api.onDshStartProgress((m) => { showStage('loading'); setStageLoading(m); });
   api.onDshStopProgress((m) => { showStage('loading'); setStageLoading(m); });
   api.onDshStopDone(() => refreshStatus());
+  // 实时日志（dsh 进程输出 + 客户端日志）
+  api.onDshLog((line) => appendLogLine(line));
+  // dsh 意外退出：显示退出原因（便于用户定位反复退出的问题）
+  api.onDshUnexpectedExit((info) => {
+    setStatus('dsh 已退出', 'red');
+    els.statusExtra.textContent = info && info.reason ? info.reason : 'dsh 异常退出';
+    showToast('error', info && info.reason ? info.reason : 'dsh 异常退出', 8000);
+  });
 
   api.onUpdateAvailable((info) => { if (info.hasUpdate) { els.btnInstallUpdate.disabled = false; showToast('info', '发现新版本 ' + info.remote + '，可到设置中更新。'); } });
   api.onUpdateInstallProgress((m) => showToast('info', m, 3000));

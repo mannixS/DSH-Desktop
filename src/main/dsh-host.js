@@ -35,6 +35,8 @@ class DshHost {
     this.child = null;
     this.running = false;
     this.stopping = false;
+    /** dsh 自身输出的最近 stderr 缓冲（用于异常退出诊断） */
+    this._stderrBuf = [];
     /** 日志回调：{ onLog?: (line: string) => void, onExit?: (code: number|null) => void } */
     this.events = {};
   }
@@ -83,24 +85,22 @@ class DshHost {
     // 触发状态变化（启动中）
     this.events.onStateChange?.(this.status);
 
-    // dsh web 模式端口参数（部分版本支持 --port，失败时回退默认 3080）
-    // 端口占用预检：若端口被其他进程占用，提前提示（避免 dsh 启动后立即退出）
-    if (mode === 'web' && portNum) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${portNum}`, { signal: AbortSignal.timeout(1500) });
-        if (res.status >= 200 && res.status < 600) {
-          this.logger.warn(`端口 ${portNum} 已有服务响应（HTTP ${res.status}），可能是残留的 dsh 或端口被占用`);
-          // 不阻断，继续启动；dsh 会尝试绑定，若失败日志可见
-        }
-      } catch {
-        // 端口未响应，正常
+    // 端口占用检测：若目标端口被其他进程占用（非本客户端管理的 dsh），
+    // 不杀掉外部进程（危险），而是自动更换可用端口，避免 dsh 启动失败（EADDRINUSE）。
+    if (mode === 'web') {
+      const resolvedPort = await this._resolveAvailablePort(portNum);
+      if (resolvedPort !== portNum) {
+        this.logger.warn(`端口 ${portNum} 被占用，已自动改用可用端口 ${resolvedPort}`);
       }
+      // 用解析出的端口覆盖，后续启动 dsh 与端口探活都用它
+      Object.assign(this, { resolvedPort });
     }
     const cliArgs = [binPath];
     if (mode === 'web') {
       cliArgs.push('web');
-      if (portNum) {
-        cliArgs.push('--port', String(portNum));
+      const usePort = this.resolvedPort || portNum;
+      if (usePort) {
+        cliArgs.push('--port', String(usePort));
       }
     } else if (mode === 'tui') {
       cliArgs.push('--profile', 'tui');
@@ -130,7 +130,8 @@ class DshHost {
 
     try {
       this.child = spawn(nodeCmd, cliArgs, {
-        shell: process.platform === 'win32',
+        // 绝对路径可能含空格，必须 shell:false + 数组传参
+        shell: false,
         windowsHide: true,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -145,7 +146,8 @@ class DshHost {
 
     this.running = true;
     this.stopping = false;
-    this._startPortProbe(portNum);
+    this.port = this.resolvedPort || portNum;
+    this._startPortProbe(this.port);
 
     this.child.stdout.on('data', (d) => {
       const lines = d.toString().split(/\r?\n/).filter(Boolean);
@@ -158,6 +160,9 @@ class DshHost {
     this.child.stderr.on('data', (d) => {
       const lines = d.toString().split(/\r?\n/).filter(Boolean);
       for (const line of lines) {
+        // 记录最近 60 行 stderr（用于异常退出时展示 dsh 自身报错）
+        this._stderrBuf.push(line);
+        if (this._stderrBuf.length > 60) this._stderrBuf.shift();
         this.logger.warn(line);
         this.events.onLog?.(line);
       }
@@ -175,13 +180,14 @@ class DshHost {
       this.child = null;
       this.events.onExit?.(code);
       this.events.onStateChange?.(this.status);
-      // 诊断：非主动停止的意外退出，推送详细原因到日志/界面
+      // 诊断：非主动停止的意外退出，把 dsh 自身 stderr 报错附带到 reason，便于用户定位
       if (!this.stopping) {
+        const stderrTail = this._stderrBuf.slice(-10).join(' | ').slice(0, 500);
         const reason = code === 0
           ? 'dsh 正常退出（可能因无任务/配置主动退出）'
-          : `dsh 异常退出（code=${code}, signal=${signal || '无'}）。请查看运行日志，常见原因：端口被占用、API Key 未配置、工作目录无效。`;
+          : `dsh 异常退出（code=${code}${signal ? ', signal=' + signal : ''}）。${stderrTail ? 'dsh 报错：' + stderrTail : '常见原因：端口被占用、API Key 未配置、工作目录无效。'}`;
         this.logger.warn(reason);
-        this.events.onUnexpectedExit?.({ code, signal, reason });
+        this.events.onUnexpectedExit?.({ code, signal, reason, stderrTail });
       }
     });
 
@@ -192,7 +198,7 @@ class DshHost {
    * 端口探活：轮询 dsh Web 端口，探测到 HTTP 200 即触发 onReady
    * （解决"进程已启动但 UI 尚未就绪"的状态脱节）
    */
-  _startPortProbe(port, maxAttempts = 60, interval = 1000) {
+  _startPortProbe(port, maxAttempts = 180, interval = 1000) {
     let attempts = 0;
     const probeTimer = setInterval(async () => {
       // 进程已退出或已停止，终止探测
@@ -210,7 +216,9 @@ class DshHost {
         const res = await fetch(`http://127.0.0.1:${port}`, {
           signal: AbortSignal.timeout(2000),
         });
-        if (res.status >= 200 && res.status < 500) {
+        // 端口有响应 + 我们启动的 dsh 进程仍存活，才算真正就绪
+        // （防止残留进程占用端口时误判；残留进程会在 start 预检时被清理）
+        if (res.status >= 200 && res.status < 500 && this.running && this.child && this.child.exitCode === null) {
           clearInterval(probeTimer);
           this.logger.info(`dsh Web UI 就绪（端口 ${port}）`);
           this.events.onReady?.(port);
@@ -296,10 +304,91 @@ class DshHost {
     }
   }
 
+  /**
+   * 解析可用端口：目标端口被占用时自动顺延（+1），最多尝试 20 个。
+   * 只探测端口是否空闲，绝不杀掉占用进程（避免影响其他应用）。
+   * @param {number} port 期望端口
+   * @returns {Promise<number>} 可用端口
+   */
+  async _resolveAvailablePort(port) {
+    for (let p = port || 3080; p < (port || 3080) + 20; p++) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${p}`, { signal: AbortSignal.timeout(800) });
+        if (res.status >= 200 && res.status < 600) {
+          // 端口有服务响应，占用中，试下一个
+          continue;
+        }
+        return p;
+      } catch {
+        // 端口无响应（连接被拒），视为空闲，可用
+        return p;
+      }
+    }
+    return port || 3080; // 兜底返回原端口
+  }
+
+  /** 终止指定进程（含子进程树） */
+  _killProcess(pid) {
+    try {
+      if (process.platform === 'win32') {
+        exec(`taskkill /pid ${pid} /T /F`, { windowsHide: true }, () => {});
+      } else {
+        process.kill(pid, 'SIGKILL');
+      }
+    } catch (err) {
+      if (err.code !== 'ESRCH') {
+        this.logger.warn(`清理端口占用进程失败: ${err.message}`);
+      }
+    }
+  }
+
   /** 重启 dsh */
   async restart(options) {
     await this.stop({ force: true });
     return await this.start(options);
+  }
+
+  /**
+   * 清理本客户端启动但已脱离管理的残留 dsh 进程（安全策略）：
+   * - 仅清理命令行包含本客户端 kernel 目录路径的 node 进程（即本客户端启动的 dsh）；
+   * - 绝不杀其他应用占用的进程（用户明确要求）。
+   * 用于应用退出时兜底，防止端口残留。
+   */
+  cleanupResidual() {
+    try {
+      const { execSync } = require('child_process');
+      const kernelMarker = this.kernelDir.replace(/\\/g, '/');
+      const isWin = process.platform === 'win32';
+      if (isWin) {
+        // wmic 已弃用，用 powershell Get-CimInstance 查询进程命令行
+        const ps = execSync(
+          `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${kernelMarker}*' } | ForEach-Object { $_.ProcessId }"`,
+          { encoding: 'utf8', windowsHide: true }
+        );
+        for (const line of ps.split(/\r?\n/)) {
+          const pid = parseInt(line.trim(), 10);
+          if (pid && pid !== process.pid) {
+            this.logger.info(`清理残留 dsh 进程 PID ${pid}`);
+            this._killProcess(pid);
+          }
+        }
+      } else {
+        // macOS/Linux: ps + grep 命令行
+        const ps = execSync(`ps -eo pid,command | grep -F '${kernelMarker}' | grep -v grep`, { encoding: 'utf8' });
+        for (const line of ps.split(/\n/)) {
+          const m = line.trim().match(/^\s*(\d+)/);
+          if (m && m[1]) {
+            const pid = parseInt(m[1], 10);
+            if (pid && pid !== process.pid) {
+              this.logger.info(`清理残留 dsh 进程 PID ${pid}`);
+              this._killProcess(pid);
+            }
+          }
+        }
+      }
+    } catch {
+      // 无残留或查询失败，忽略
+    }
   }
 
   get status() {

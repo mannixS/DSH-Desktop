@@ -64,6 +64,7 @@
       <span class="status-mini muted" id="status-version"></span>
       <button class="btn btn-sm" id="btn-start-dsh">启动</button>
       <button class="btn btn-sm" id="btn-stop-dsh" disabled>停止</button>
+      <button class="btn btn-sm" id="btn-open-logs">日志</button>
       <button class="btn btn-sm" id="btn-open-settings">设置</button>
     </div>
   </footer>
@@ -167,6 +168,25 @@
         <span class="muted small" id="settings-save-tip"></span>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- 运行日志弹层 -->
+<div class="modal hidden" id="logs-modal">
+  <div class="modal-backdrop" id="logs-backdrop"></div>
+  <div class="modal-panel log-modal-panel">
+    <header class="modal-header">
+      <h2>运行日志</h2>
+      <div class="card-actions">
+        <button class="btn btn-sm" id="btn-copy-log">复制</button>
+        <button class="btn btn-sm" id="btn-clear-log">清空</button>
+        <button class="btn btn-sm" id="btn-close-logs">关闭</button>
+      </div>
+    </header>
+    <div class="log-toolbar">
+      <span class="muted small">客户端与 dsh 进程的完整运行输出（最近 500 条，实时更新）</span>
+    </div>
+    <pre class="log-output" id="log-output">（暂无日志）</pre>
   </div>
 </div>
 

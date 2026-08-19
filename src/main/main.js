@@ -68,20 +68,35 @@ function bootstrap() {
   dshHost.events.onStateChange = (status) => notifyRenderer('dsh:state', status);
   dshHost.events.onReady = (port) => {
     pushLog('[dsh]', `dsh Web UI 已就绪（端口 ${port}）`);
-    restartCount = 0; // 成功就绪后重置重启计数
     notifyRenderer('dsh:ready', { port });
   };
-  // dsh 意外退出自动重启（带退避，最多 3 次），避免"启动不起来"
-  let restartCount = 0;
+  // dsh 意外退出自动重启（时间窗口限频：60s 内最多 3 次，之后停止并提示）
+  // 避免 dsh 崩溃→重启→再崩溃的无限循环（旧版 restartCount 在 onReady 重置会导致死循环）
+  const RESTART_WINDOW_MS = 60000;
+  const RESTART_MAX = 3;
+  let restartTimestamps = [];
   let restartTimer = null;
   dshHost.events.onUnexpectedExit = ({ code, signal, reason }) => {
     pushLog('[dsh]', reason);
     notifyRenderer('dsh:unexpected-exit', { code, signal, reason });
-    // 自动重启（除非用户主动停止或应用退出中）
-    if (settings.get('autoStartDsh') && !quitting && restartCount < 3) {
-      restartCount++;
-      const delay = Math.min(3000 * restartCount, 9000);
-      pushLog('[dsh]', `${delay / 1000}s 后自动重启 dsh（第 ${restartCount}/3 次）...`);
+
+    if (settings.get('autoStartDsh') && !quitting) {
+      const now = Date.now();
+      // 清理超出窗口的重启记录
+      restartTimestamps = restartTimestamps.filter((t) => now - t < RESTART_WINDOW_MS);
+      if (restartTimestamps.length >= RESTART_MAX) {
+        pushLog('[dsh]', `60 秒内 dsh 异常退出已达 ${RESTART_MAX} 次，已停止自动重启。请查看运行日志排查。`);
+        notifyRenderer('dsh:unexpected-exit', {
+          code, signal,
+          reason: `60 秒内 dsh 异常退出已达 ${RESTART_MAX} 次，已停止自动重启。请查看运行日志排查（端口占用/API Key 未配置/工作目录无效等）。`,
+        });
+        restartTimestamps = [];
+        return;
+      }
+      restartTimestamps.push(now);
+      const attempt = restartTimestamps.length;
+      const delay = Math.min(3000 * attempt, 9000);
+      pushLog('[dsh]', `${delay / 1000}s 后自动重启 dsh（${attempt}/${RESTART_MAX}）...`);
       clearTimeout(restartTimer);
       restartTimer = setTimeout(async () => {
         if (!dshHost.running && !quitting) {
@@ -92,9 +107,6 @@ function bootstrap() {
           }
         }
       }, delay);
-    } else if (restartCount >= 3) {
-      pushLog('[dsh]', '自动重启次数已达上限，请查看运行日志排查问题。');
-      notifyRenderer('dsh:unexpected-exit', { code, signal, reason: '自动重启次数已达上限，请查看运行日志排查问题。' });
     }
   };
 
@@ -436,23 +448,30 @@ function bootstrap() {
     }
   });
 
-  // 应用退出时同步关闭内核（含子进程树），避免 dsh 残留
+  // 应用退出时彻底关闭 dsh（含进程树 + 本客户端启动的残留进程），避免端口残留
   let quitting = false;
   app.on('before-quit', (event) => {
     if (quitting) return;
-    if (!dshHost.running) {
-      if (updateTimer) clearInterval(updateTimer);
-      return;
-    }
-    // 阻止默认退出，等待 dsh 完全停止后再退出
+    // 无论 dshHost.running 是否为 true，都执行清理：
+    // - running=true：正常终止当前 dsh 进程树
+    // - running=false：可能有上一会话残留的 dsh 进程（命令行含本客户端 kernel 路径），一并清理
     event.preventDefault();
     quitting = true;
     if (updateTimer) clearInterval(updateTimer);
-    pushLog('[app]', '应用退出中，正在关闭 dsh 内核...');
-    dshHost.stop({ force: true }).then(() => {
-      pushLog('[app]', 'dsh 内核已关闭，应用退出。');
+    pushLog('[app]', '应用退出中，正在彻底关闭 dsh 服务...');
+    const cleanup = async () => {
+      // 1. 停止当前管理的 dsh 进程（含子进程树）
+      if (dshHost.running) {
+        await dshHost.stop({ force: true });
+      }
+      // 2. 清理本客户端启动但已脱离管理的残留 dsh 进程（按 kernel 路径识别，只清理自己的）
+      dshHost.cleanupResidual();
+      // 3. 短暂等待进程退出
+      await new Promise((r) => setTimeout(r, 800));
+      pushLog('[app]', 'dsh 服务已彻底关闭，应用退出。');
       app.exit(0);
-    });
+    };
+    cleanup();
   });
 
   app.on('activate', () => {

@@ -60,6 +60,7 @@ const api = {
   // ---------- dsh 进程状态（实时） ----------
   onDshState: (cb) => ipcRenderer.on('dsh:state', (_e, status) => cb(status)),
   onDshReady: (cb) => ipcRenderer.on('dsh:ready', (_e, info) => cb(info)),
+  onDshUnexpectedExit: (cb) => ipcRenderer.on('dsh:unexpected-exit', (_e, info) => cb(info)),
   onDshStartProgress: (cb) => ipcRenderer.on('dsh:start-progress', (_e, msg) => cb(msg)),
   onDshStopProgress: (cb) => ipcRenderer.on('dsh:stop-progress', (_e, msg) => cb(msg)),
   onDshStopDone: (cb) => ipcRenderer.on('dsh:stop-done', (_e, info) => cb(info)),
