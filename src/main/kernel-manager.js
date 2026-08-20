@@ -62,6 +62,36 @@ class KernelManager {
     return path.join(this.kernelDir, 'node_modules', DSH_PACKAGE, 'lib', 'bin.js');
   }
 
+  /**
+   * 内置对齐标记文件（记录最近一次用内置内核覆盖对齐时的版本）
+   * 放 kernelDir 平级，避免被覆盖/删除时丢失。
+   */
+  get alignMarkPath() {
+    return `${this.kernelDir}.aligned-mark.json`;
+  }
+
+  /** 读取对齐标记（不存在或损坏时返回空对象） */
+  async _readAlignMark() {
+    try {
+      return JSON.parse(await fsp.readFile(this.alignMarkPath, 'utf8'));
+    } catch {
+      return {};
+    }
+  }
+
+  /** 写入对齐标记 */
+  async _writeAlignMark(version) {
+    try {
+      await fsp.writeFile(
+        this.alignMarkPath,
+        JSON.stringify({ version, at: Date.now() }),
+        'utf8'
+      );
+    } catch (err) {
+      this.logger.warn(`写入内核对齐标记失败: ${err.message}`);
+    }
+  }
+
   // ---------------------------------------------------------------
   // 版本工具
   // ---------------------------------------------------------------
@@ -224,24 +254,36 @@ class KernelManager {
     // 用户目录已安装内核，判断是否需要用内置内核对齐：
     //  1. 损坏（如导入不完整）→ 用内置修复
     //  2. 内置版本更高 → 自动升级对齐到内置（"内置版本优先"策略）
-    //  3. 否则 → 尊重本地已装版本，不覆盖
+    //  3. 内置版本等于本地，但尚未对齐过 → 覆盖一次（修复历史上同版本的
+    //     缺损内核，如早期坏归档导入的 rc.7；用对齐标记去重，避免每次启动重复解压）
+    //  4. 否则（本地更高，或已对齐）→ 尊重本地已装版本
     const local = await this.getLocalKernelInfo();
     let shouldReplace = false;
+    let alignReason = '';
     if (local.installed) {
       const runnable = await this._verifyKernelRunnable(this.kernelDir);
-      // 内置版本更高：内置版本合法、本地版本合法、且内置 > 本地
-      const bundledHigher =
-        bundled.version != null &&
-        local.version != null &&
-        this.compareVersions(bundled.version, local.version) > 0;
+      const cmp =
+        bundled.version != null && local.version != null
+          ? this.compareVersions(bundled.version, local.version)
+          : 0;
+      const mark = await this._readAlignMark();
+      // 尚未对齐过：标记缺失，或标记版本与当前内置版本不同
+      const notAligned = mark.version !== bundled.version;
       if (!runnable) {
         this.logger.warn(`本地内核 v${local.version} 无法运行（可能导入不完整），将使用内置内核自动修复...`);
         progress(`检测到本地内核损坏，正在使用内置内核 v${bundled.version} 修复...`);
         shouldReplace = true;
-      } else if (bundledHigher) {
+        alignReason = 'broken';
+      } else if (cmp > 0) {
         this.logger.info(`内置内核 v${bundled.version} 高于本地 v${local.version}，自动对齐到内置版本...`);
         progress(`检测到内置内核 v${bundled.version} 更新，正在自动对齐（本地 v${local.version}）...`);
         shouldReplace = true;
+        alignReason = 'bundled-newer';
+      } else if (cmp === 0 && notAligned) {
+        this.logger.info(`本地内核 v${local.version} 与内置同版本但未对齐过，用内置内核覆盖对齐...`);
+        progress(`正在用内置内核 v${bundled.version} 覆盖对齐本地内核...`);
+        shouldReplace = true;
+        alignReason = 'align-once';
       } else {
         return { imported: false, reason: 'already-installed', version: local.version };
       }
@@ -296,6 +338,8 @@ class KernelManager {
     }
 
     progress(`内置内核 v${bundled.version} 导入完成`);
+    // 记录已用内置内核对齐（避免同版本场景每次启动重复覆盖）
+    await this._writeAlignMark(bundled.version);
     return { imported: true, version: bundled.version };
   }
 
