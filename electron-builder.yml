@@ -58,14 +58,16 @@ nsis:
   # 安装引导界面右侧大图（必须 164x314 bmp，由构建时自动从 png 转换）
   installerHeaderIcon: icon.ico
 
-# 注意：macOS 产物使用 zip 而非 dmg。
-# GitHub Actions 的 macos-latest 已迁移到 arm64 runner，在 arm64 上交叉创建
-# x64 的 APFS DMG 时 hdiutil detach 会失败（electron-builder 25.x 已知问题）。
-# zip 内含 .app，解压即可用，arm64 runner 上稳定。
-# 如需 dmg，可在本地 macOS（Intel 或 arm）执行 `npx electron-builder --mac dmg`。
+# macOS 产物：
+#  - arm64 出 dmg（Apple Silicon 双击即装，不用拖拽）+ zip（electron-updater 自更新必需）
+#  - x64 仍出 zip：arm64 CI runner 交叉创建 x64 的 APFS DMG 时 hdiutil detach 会失败
+#    （electron-builder 25.x 已知问题），故 x64 用 zip 保证稳定
 mac:
   icon: icon.icns
   target:
+    - target: dmg
+      arch:
+        - arm64
     - target: zip
       arch:
         - arm64

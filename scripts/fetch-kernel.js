@@ -26,12 +26,14 @@ const DSH_PACKAGE = '@deepseek-ai/dsh';
 const INFO_FILE = path.join(kernelDir, 'bundle-info.json');
 
 function run(cmd, args, opts = {}) {
-  const r = spawnSync(cmd, args, {
+  const spawnOpts = {
     encoding: 'utf8',
     shell: process.platform === 'win32',
     cwd: opts.cwd || root,
     stdio: opts.silent ? 'pipe' : 'inherit',
-  });
+  };
+  if (opts.env) spawnOpts.env = opts.env;
+  const r = spawnSync(cmd, args, spawnOpts);
   return r;
 }
 
@@ -78,7 +80,11 @@ const install = run(
     '--loglevel=error',
     `${DSH_PACKAGE}@${version}`,
   ],
-  { silent: true }
+  {
+    silent: true,
+    // mac arm64 CI runner 默认堆内存(约2GB)不足以解压 dsh 大依赖, 提升堆避免 OOM
+    env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=4096' },
+  }
 );
 
 if (install.status !== 0) {

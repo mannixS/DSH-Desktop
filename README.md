@@ -24,7 +24,8 @@
 | 平台 | 文件 | 说明 |
 | --- | --- | --- |
 | Windows x64 | `DSH-Desktop-<版本>-win-x64.exe` | 双击安装（NSIS 安装向导） |
-| macOS Apple Silicon | `DSH-Desktop-<版本>-mac-arm64.zip` | 解压后拖入「应用程序」 |
+| macOS Apple Silicon | `DSH-Desktop-<版本>-mac-arm64.dmg` | 双击直接安装（推荐） |
+| macOS Apple Silicon（解压版） | `DSH-Desktop-<版本>-mac-arm64.zip` | 解压后拖入「应用程序」 |
 | macOS Intel | `DSH-Desktop-<版本>-mac-x64.zip` | 解压后拖入「应用程序」 |
 
 > **macOS 首次打开提示「已损坏/无法验证开发者」？**
