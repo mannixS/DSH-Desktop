@@ -221,17 +221,32 @@ class KernelManager {
       return { imported: false, reason: 'no-bundled-kernel' };
     }
 
-    // 用户目录已安装内核：
-    //  - 可运行（dsh --version 通过）→ 不覆盖（用户可能已手动更新/回滚）
-    //  - 已安装但无法运行（如历史版本的损坏归档导入）→ 清理后用内置内核自动修复
+    // 用户目录已安装内核，判断是否需要用内置内核对齐：
+    //  1. 损坏（如导入不完整）→ 用内置修复
+    //  2. 内置版本更高 → 自动升级对齐到内置（"内置版本优先"策略）
+    //  3. 否则 → 尊重本地已装版本，不覆盖
     const local = await this.getLocalKernelInfo();
+    let shouldReplace = false;
     if (local.installed) {
       const runnable = await this._verifyKernelRunnable(this.kernelDir);
-      if (runnable) {
+      // 内置版本更高：内置版本合法、本地版本合法、且内置 > 本地
+      const bundledHigher =
+        bundled.version != null &&
+        local.version != null &&
+        this.compareVersions(bundled.version, local.version) > 0;
+      if (!runnable) {
+        this.logger.warn(`本地内核 v${local.version} 无法运行（可能导入不完整），将使用内置内核自动修复...`);
+        progress(`检测到本地内核损坏，正在使用内置内核 v${bundled.version} 修复...`);
+        shouldReplace = true;
+      } else if (bundledHigher) {
+        this.logger.info(`内置内核 v${bundled.version} 高于本地 v${local.version}，自动对齐到内置版本...`);
+        progress(`检测到内置内核 v${bundled.version} 更新，正在自动对齐（本地 v${local.version}）...`);
+        shouldReplace = true;
+      } else {
         return { imported: false, reason: 'already-installed', version: local.version };
       }
-      this.logger.warn(`本地内核 v${local.version} 无法运行（可能导入不完整），将使用内置内核自动修复...`);
-      progress(`检测到本地内核损坏，正在使用内置内核 v${bundled.version} 修复...`);
+    }
+    if (shouldReplace) {
       await this._rmrf(this.kernelDir);
     }
 
