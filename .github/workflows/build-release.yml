@@ -47,7 +47,21 @@ jobs:
         run: |
           npm run fetch-kernel
           npm run fetch-node
-          npx electron-builder ${{ matrix.platform }} --publish never
+          # electron-builder 需从 GitHub CDN 下载 Electron 二进制（~115MB），
+          # 网络抖动可能导致下载中断（连接被强制关闭，日志中可见 wsarecv 错误）。
+          # 失败时清理残留产物与 Electron 缓存后重试（最多 3 次），
+          # 避免单次网络抖动使整个双端发布流程失败。
+          for i in 1 2 3; do
+            echo "===> electron-builder 第 $i 次尝试"
+            if npx electron-builder ${{ matrix.platform }} --publish never; then
+              exit 0
+            fi
+            echo "===> 第 $i 次失败，清理产物与 Electron 缓存后重试..."
+            rm -rf dist
+            rm -rf "$HOME/.cache/electron" "$LOCALAPPDATA/electron/Cache"
+            sleep 10
+          done
+          exit 1
         env:
           # 内核版本（如需固定可改，缺省 latest）
           DSH_KERNEL_VERSION: latest

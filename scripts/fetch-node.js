@@ -30,9 +30,11 @@ const BASE = 'https://nodejs.org/dist';
 function nodeCmd() { return process.platform === 'win32' ? 'node.exe' : 'node'; }
 
 function run(cmd, args, opts = {}) {
+  // shell:false + 数组传参：绝对路径可能含空格（用户名等），
+  // 走 shell 拼接反而会被拆断，且 Node 20+ 会告警（DEP0190）
   return spawnSync(cmd, args, {
     encoding: 'utf8',
-    shell: process.platform === 'win32',
+    shell: false,
     cwd: root,
     stdio: opts.silent ? 'pipe' : 'inherit',
   });
