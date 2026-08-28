@@ -16,6 +16,10 @@ const DEFAULTS = {
   checkIntervalMinutes: 60,
   // 更新通道：'latest' 跟随 npm latest（可能为 RC）；'stable' 仅正式版
   updateChannel: 'latest',
+  // 内核下载源：'auto'（探测最快源）/ 'cn'（国内镜像）/ 'official'（官方源）/ 'custom'（自定义）
+  npmRegistryMode: 'auto',
+  // 自定义下载源地址（npmRegistryMode 为 custom 时生效）
+  npmRegistryCustom: '',
   // 检测到新版本时是否自动安装（false = 仅提示，由用户手动确认）
   autoInstall: false,
   // dsh Web UI 端口

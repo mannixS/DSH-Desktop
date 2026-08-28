@@ -5,7 +5,7 @@
  * Electron 主进程入口：窗口创建、IPC 路由、内核管理与 dsh 托管编排
  */
 
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { KernelManager } = require('./kernel-manager');
@@ -27,6 +27,8 @@ function bootstrap() {
   let updateTimer = null;
   let checkingUpdate = false;
   let installingUpdate = false;
+  // 内核更新期间内核目录被锁定：禁止启动 dsh（避免文件占用导致替换失败/内核损坏）
+  let kernelLocked = false;
 
   // 各模块数据目录
   const userData = app.getPath('userData');
@@ -34,7 +36,16 @@ function bootstrap() {
   const dshHome = path.join(userData, 'dsh-home');
 
   const settings = new Settings(path.join(userData, 'settings.json'));
-  const kernelManager = new KernelManager({ kernelDir, logger: makeLogger('[kernel]') });
+  const kernelManager = new KernelManager({
+    kernelDir,
+    logger: makeLogger('[kernel]'),
+    // 下载源配置读取函数（settings 可能随时更新，保持惰性读取；
+    // auto 模式由 KernelManager 内部测速探测最快源）
+    registryConfig: () => ({
+      mode: settings.get('npmRegistryMode') || 'auto',
+      customUrl: settings.get('npmRegistryCustom') || '',
+    }),
+  });
   const dshHost = new DshHost({
     kernelDir,
     dshHome,
@@ -80,7 +91,7 @@ function bootstrap() {
     pushLog('[dsh]', reason);
     notifyRenderer('dsh:unexpected-exit', { code, signal, reason });
 
-    if (settings.get('autoStartDsh') && !quitting) {
+    if (settings.get('autoStartDsh') && !quitting && !kernelLocked) {
       const now = Date.now();
       // 清理超出窗口的重启记录
       restartTimestamps = restartTimestamps.filter((t) => now - t < RESTART_WINDOW_MS);
@@ -164,6 +175,30 @@ function bootstrap() {
     mainWindow.on('closed', () => {
       mainWindow = null;
     });
+
+    // 内核更新中关闭窗口 = 退出应用：先确认，避免中断更新导致内核损坏。
+    // 确认退出后立即中止 npm 安装并清理临时目录（下次启动用内置内核兜底修复）。
+    mainWindow.on('close', (e) => {
+      if (installingUpdate && !quitting) {
+        const choice = dialog.showMessageBoxSync(mainWindow, {
+          type: 'warning',
+          buttons: ['取消退出', '仍然退出'],
+          defaultId: 0,
+          cancelId: 0,
+          message: '内核正在更新中',
+          detail:
+            '此时退出可能中断内核更新并导致内核损坏。推荐先等待更新完成。\n\n确定要退出吗？' +
+            '（若确实退出，下次启动时会用安装包内置内核自动修复）',
+        });
+        if (choice !== 1) {
+          e.preventDefault();
+          return;
+        }
+        kernelManager.abortInstall({ removeTmp: true });
+        installingUpdate = false;
+        kernelLocked = false;
+      }
+    });
   }
 
   // ---------------- 自动更新逻辑 ----------------
@@ -201,9 +236,8 @@ function bootstrap() {
   async function startUpdateInstall() {
     if (installingUpdate) return { ok: false, reason: 'installing' };
     installingUpdate = true;
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update:install-start');
-    }
+    kernelLocked = true; // 更新期间锁定内核目录，禁止 dsh 启动
+    notifyRenderer('update:install-start', null);
     // 记录更新前 dsh 是否在运行：更新前必须停止（Windows 下文件占用会导致
     // 内核目录备份/替换失败，甚至损坏现役内核），更新成功后再恢复运行
     let wasRunning = false;
@@ -216,16 +250,12 @@ function bootstrap() {
       if (dshHost.running) {
         wasRunning = true;
         pushLog('[update]', '更新前先停止 dsh 服务，以安全替换内核目录...');
-        notifyRenderer('update:install-progress', '正在停止 dsh 服务以安全更新内核...');
+        notifyRenderer('update:install-progress', { message: '正在停止 dsh 服务以安全更新内核...', percent: 0 });
         await dshHost.stop({ force: true });
       }
       const remote = info.remote;
       const result = await kernelManager.installKernel(remote, {
-        onProgress: (msg) => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('update:install-progress', msg);
-          }
-        },
+        onProgress: (msg) => notifyRenderer('update:install-progress', msg),
       });
       await settings.update({ lastUpdateAt: Date.now() });
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -238,22 +268,26 @@ function bootstrap() {
       }
       return { ok: true, version: result.version };
     } catch (err) {
-      // 更新失败但更新前 dsh 在运行：尝试恢复运行旧内核
-      if (wasRunning && !dshHost.running) {
-        pushLog('[update]', '更新失败，尝试恢复运行原内核...');
-        try {
-          await dshHost.start({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
-        } catch (startErr) {
-          pushLog('[update]', '恢复 dsh 运行失败: ' + startErr.message);
+      // 用户选择退出应用中途中止安装：不再做恢复/重试，直接交给退出流程收尾
+      if (!quitting) {
+        // 更新失败但更新前 dsh 在运行：尝试恢复运行旧内核
+        if (wasRunning && !dshHost.running) {
+          pushLog('[update]', '更新失败，尝试恢复运行原内核...');
+          try {
+            await dshHost.start({ mode: settings.get('dshMode'), port: settings.get('dshPort') });
+          } catch (startErr) {
+            pushLog('[update]', '恢复 dsh 运行失败: ' + startErr.message);
+          }
         }
-      }
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('update:install-error', err.message);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('update:install-error', err.message);
+        }
       }
       pushLog('[update]', `安装更新失败: ${err.message}`);
       return { ok: false, error: err.message };
     } finally {
       installingUpdate = false;
+      kernelLocked = false;
     }
   }
 
@@ -351,6 +385,10 @@ function bootstrap() {
     });
 
     ipcMain.handle('dsh:start', async (_e, opts) => {
+      // 内核更新中禁止启动：文件占用会导致内核替换失败甚至损坏
+      if (kernelLocked) {
+        return { ok: false, reason: 'kernel-updating', status: dshHost.status };
+      }
       const mode = opts?.mode || settings.get('dshMode');
       const port = opts?.port || settings.get('dshPort');
       // 启动中状态实时推送给渲染层（进度提示）
@@ -367,6 +405,10 @@ function bootstrap() {
     });
 
     ipcMain.handle('dsh:restart', async (_e, opts) => {
+      // 内核更新中禁止重启 dsh（设置端口保存触发的自动重启同样受限）
+      if (kernelLocked) {
+        return { ok: false, reason: 'kernel-updating', status: dshHost.status };
+      }
       const mode = opts?.mode || settings.get('dshMode');
       const port = opts?.port || settings.get('dshPort');
       const result = await dshHost.restart({ mode, port });
@@ -405,6 +447,9 @@ function bootstrap() {
     });
 
     ipcMain.handle('kernel:remove', async () => {
+      if (kernelLocked) {
+        return { ok: false, reason: 'kernel-updating' };
+      }
       try {
         await kernelManager.removeKernel();
         return { ok: true };
@@ -508,6 +553,31 @@ function bootstrap() {
   let quitting = false;
   app.on('before-quit', (event) => {
     if (quitting) return;
+    // 内核更新中退出：内核目录可能处于替换的不安全状态，
+    // 必须先向用户确认（退出可能损坏内核），确认后中止安装并收尾
+    if (installingUpdate) {
+      const choice =
+        mainWindow && !mainWindow.isDestroyed()
+          ? dialog.showMessageBoxSync(mainWindow, {
+              type: 'warning',
+              buttons: ['取消退出', '仍然退出'],
+              defaultId: 0,
+              cancelId: 0,
+              message: '内核正在更新中',
+              detail:
+                '此时退出可能中断内核更新并导致内核损坏。推荐先等待更新完成。\n\n确定要退出吗？' +
+                '（若确实退出，下次启动时会用安装包内置内核自动修复）',
+            })
+          : 1;
+      if (choice !== 1) {
+        event.preventDefault();
+        return;
+      }
+      // 确认退出：立即中止 npm 安装并清理临时目录，把风险窗口缩到最小
+      kernelManager.abortInstall({ removeTmp: true });
+      installingUpdate = false;
+      kernelLocked = false;
+    }
     // 无论 dshHost.running 是否为 true，都执行清理：
     // - running=true：正常终止当前 dsh 进程树
     // - running=false：可能有上一会话残留的 dsh 进程（命令行含本客户端 kernel 路径），一并清理

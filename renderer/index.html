@@ -105,6 +105,30 @@
             <button class="btn btn-sm btn-accent" id="btn-install-update" disabled>更新内核</button>
           </div>
         </div>
+        <!-- 内核更新进度（参照程序更新样式内嵌于卡片） -->
+        <div class="kernel-update-box hidden" id="kernel-update-box">
+          <div class="update-bar"><div class="update-bar-fill" id="kernel-update-bar"></div></div>
+          <div class="update-bar-text" id="kernel-update-text"></div>
+        </div>
+        <div class="setting-row">
+          <div>
+            <label class="setting-label">内核下载源</label>
+            <p class="muted">自动：检测网络环境，自动选用最快源</p>
+          </div>
+          <select class="input-select" id="set-npm-registry-mode">
+            <option value="auto">自动（推荐）</option>
+            <option value="cn">国内镜像（npmmirror）</option>
+            <option value="official">官方源（npmjs.org）</option>
+            <option value="custom">自定义</option>
+          </select>
+        </div>
+        <div class="setting-row hidden" id="row-npm-registry-custom">
+          <div>
+            <label class="setting-label">自定义源地址</label>
+            <p class="muted">如 https://registry.npmjs.org</p>
+          </div>
+          <input type="text" class="input-text" id="set-npm-registry-custom" placeholder="https://...">
+        </div>
         <div class="setting-row">
           <div><label class="setting-label">自动检查更新</label><p class="muted">启动后自动检查并定时轮询</p></div>
           <label class="switch"><input type="checkbox" id="set-auto-check"><span class="slider"></span></label>

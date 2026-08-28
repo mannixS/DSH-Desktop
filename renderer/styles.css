@@ -153,6 +153,26 @@ body[data-platform="mac"] .titlebar { padding-right:14px; }
 .app-update-result.ok { border-color:rgba(16,185,129,.35); color:var(--accent); }
 .app-update-result.err { border-color:rgba(244,63,94,.35); color:var(--danger); }
 
+/* 内核更新进度条（内嵌于「内核更新」卡片） */
+.kernel-update-box { margin-top:12px; padding:12px 14px; border-radius:8px; background:var(--hover); border:1px solid var(--border); }
+.update-bar { height:8px; border-radius:4px; background:var(--border); overflow:hidden; position:relative; }
+.update-bar-fill {
+  height:100%; width:0%;
+  border-radius:4px;
+  background:linear-gradient(90deg,var(--primary),var(--accent));
+  transition:width .35s ease;
+}
+/* 更新进行中的流动高光动画，弱网无输出时也直观可见 */
+.kernel-update-box.active .update-bar-fill {
+  background:linear-gradient(90deg,var(--primary),var(--accent),var(--primary));
+  background-size:200% 100%;
+  animation:update-bar-flow 1.6s linear infinite;
+}
+@keyframes update-bar-flow { to { background-position:-200% 0; } }
+.update-bar-text { margin-top:8px; font-size:12px; color:var(--text-muted); min-height:18px; word-break:break-all; line-height:1.5; white-space:pre-wrap; }
+.kernel-update-box.done .update-bar-fill { background:var(--accent); animation:none; }
+.kernel-update-box.err .update-bar-fill { background:var(--danger); animation:none; }
+
 .hidden { display:none !important; }
 ::-webkit-scrollbar { width:8px; height:8px; }
 ::-webkit-scrollbar-thumb { background:#333a4b; border-radius:4px; }

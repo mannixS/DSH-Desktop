@@ -25,8 +25,12 @@ const os = require('os');
 
 // dsh 在 npm 上的包名
 const DSH_PACKAGE = '@deepseek-ai/dsh';
-// npm registry 端点
+// 官方 npm registry 端点（默认兜底）
 const REGISTRY_BASE = 'https://registry.npmjs.org';
+// 国内镜像（npmmirror，已验证同步 @deepseek-ai/dsh）
+const CN_REGISTRY = 'https://registry.npmmirror.com';
+// 自动源探测结果的缓存时长（5 分钟），避免每次操作都重新测速
+const AUTO_REGISTRY_CACHE_MS = 5 * 60 * 1000;
 // 默认 Node 最低版本要求（dsh 官方要求 v18+，推荐 v24）
 const MIN_NODE_MAJOR = 18;
 const RECOMMEND_NODE_MAJOR = 24;
@@ -36,16 +40,78 @@ class KernelManager {
    * @param {object} options
    * @param {string} options.kernelDir 内核安装根目录（含 .bak/.tmp 平级）
    * @param {object} [options.logger] 可选日志器 { info, warn, error }
+   * @param {function():{mode:string,customUrl?:string}} [options.registryConfig] 下载源配置读取函数
+   *   mode: 'auto'（默认，探测最快源）/ 'cn' / 'official' / 'custom'
    */
-  constructor({ kernelDir, logger }) {
+  constructor({ kernelDir, logger, registryConfig }) {
     this.kernelDir = kernelDir;
     this.backupDir = `${kernelDir}.bak`;
     this.tmpDir = `${kernelDir}.tmp`;
+    this.registryConfig = registryConfig || null;
     this.logger = logger || {
       info: (...a) => console.log('[kernel]', ...a),
       warn: (...a) => console.warn('[kernel]', ...a),
       error: (...a) => console.error('[kernel]', ...a),
     };
+    /** 自动源探测缓存 { url, at } */
+    this._autoRegistry = null;
+    /** 正在进行的 npm install 子进程（用于中止退出保护） */
+    this._npmChild = null;
+  }
+
+  // ---------------------------------------------------------------
+  // npm registry 下载源解析
+  // ---------------------------------------------------------------
+
+  /**
+   * 解析当前应使用的 registry 地址（异步：auto 模式需要测速探测）
+   * @returns {Promise<string>}
+   */
+  async getRegistryBase() {
+    const cfg = (this.registryConfig && this.registryConfig()) || {};
+    const mode = cfg.mode || 'auto';
+    if (mode === 'cn') return CN_REGISTRY;
+    if (mode === 'official') return REGISTRY_BASE;
+    if (mode === 'custom') {
+      const url = (cfg.customUrl || '').trim().replace(/\/+$/, '');
+      if (/^https?:\/\//i.test(url)) return url;
+      this.logger.warn(`自定义下载源无效（${url}），回退官方源`);
+      return REGISTRY_BASE;
+    }
+    return this._resolveAutoRegistry();
+  }
+
+  /**
+   * 自动模式：并发探测内置两源的访问延迟，取更快且可用的那个。
+   * 结果缓存 5 分钟，探测失败时回退官方源（不影响功能）。
+   * @returns {Promise<string>}
+   */
+  async _resolveAutoRegistry() {
+    if (this._autoRegistry && Date.now() - this._autoRegistry.at < AUTO_REGISTRY_CACHE_MS) {
+      return this._autoRegistry.url;
+    }
+    // 用最小元数据端点测速（带 /latest 的 packument 比全量小得多）
+    const probe = async (url) => {
+      const t0 = Date.now();
+      try {
+        const res = await fetch(`${url}/${DSH_PACKAGE}/latest`, {
+          signal: AbortSignal.timeout(4000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return { url, ms: Date.now() - t0 };
+      } catch {
+        return null;
+      }
+    };
+    const results = await Promise.all([probe(CN_REGISTRY), probe(REGISTRY_BASE)]);
+    const ok = results.filter(Boolean).sort((a, b) => a.ms - b.ms);
+    const pick = ok.length > 0 ? ok[0].url : REGISTRY_BASE;
+    this._autoRegistry = { url: pick, at: Date.now() };
+    this.logger.info(
+      `自动下载源探测完成，选用 ${pick}` +
+        (ok.length > 0 ? `（${ok[0].ms}ms，备选 ${ok.slice(1).map((r) => r.url + ':' + r.ms + 'ms').join(', ') || '无'}）` : '（均不可达，回退官方源）')
+    );
+    return pick;
   }
 
   // ---------------------------------------------------------------
@@ -429,7 +495,8 @@ class KernelManager {
    * @returns {Promise<{ channel: string, version: string|null, publishedAt: string|null, distTags: object }>}
    */
   async fetchRemoteVersion(channel = 'latest') {
-    const res = await fetch(`${REGISTRY_BASE}/${DSH_PACKAGE}`, {
+    const base = await this.getRegistryBase();
+    const res = await fetch(`${base}/${DSH_PACKAGE}`, {
       signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) {
@@ -625,17 +692,20 @@ class KernelManager {
   /**
    * 安装或更新内核到指定版本
    * 流程：安装到临时目录 → 校验可运行 → 备份旧版 → 原子替换 → 清理
+   * 进度回调为结构化对象 { message, percent }（percent 为 0-100 整数）。
    * @param {string} version 目标版本（如 '0.1.0-rc.6' 或 'latest'）
    * @param {object} [options]
-   * @param {function(string):void} [options.onProgress] 进度回调
+   * @param {function({message:string,percent:number}):void} [options.onProgress] 进度回调
    * @returns {Promise<{ success: boolean, version: string|null, error?: string }>}
    */
   async installKernel(version, { onProgress } = {}) {
-    const progress = (msg) => {
-      this.logger.info(msg);
-      if (typeof onProgress === 'function') onProgress(msg);
+    const progress = (percent, message) => {
+      const pct = Math.max(0, Math.min(100, Math.round(percent)));
+      this.logger.info(message);
+      if (typeof onProgress === 'function') onProgress({ message, percent: pct });
     };
 
+    progress(1, '正在检测 Node.js / npm 环境...');
     const env = await this.detectNodeEnvironment();
     if (!env.nodeAvailable || !env.npmAvailable) {
       throw new Error(
@@ -648,13 +718,13 @@ class KernelManager {
       );
     }
 
-    progress(`开始安装内核 @deepseek-ai/dsh@${version} ...`);
+    progress(3, `环境就绪，开始安装内核 @deepseek-ai/dsh@${version} ...`);
 
     // 1. 清理并创建临时目录
     await this._rmrf(this.tmpDir);
     await fsp.mkdir(this.tmpDir, { recursive: true });
 
-    // 2. 在临时目录执行 npm install
+    // 2. 在临时目录执行 npm install（内部按 3→90 估算进度）
     try {
       await this._runNpmInstall(this.tmpDir, version, progress);
     } catch (err) {
@@ -680,12 +750,14 @@ class KernelManager {
       throw new Error('安装校验失败：内核入口文件缺失。');
     }
 
-    progress(`内核 ${installedVersion} 下载完成，正在校验可运行性...`);
+    progress(91, `内核 ${installedVersion} 依赖安装完成，正在校验可运行性...`);
     const runOk = await this._verifyKernelRunnable(this.tmpDir);
     if (!runOk) {
       await this._rmrf(this.tmpDir);
       throw new Error(`内核 ${installedVersion} 启动校验失败，已中止安装。`);
     }
+
+    progress(95, `内核 ${installedVersion} 校验通过，正在替换旧内核...`);
 
     // 4. 备份旧内核（失败则中止更新：保留现役内核不被破坏，回滚能力不受影响）
     const oldInfo = await this.getLocalKernelInfo();
@@ -693,7 +765,7 @@ class KernelManager {
     if (oldInfo.installed) {
       try {
         await fsp.rename(this.kernelDir, this.backupDir);
-        progress(`已备份旧内核 (${oldInfo.version})`);
+        progress(96, `已备份旧内核 (${oldInfo.version})`);
       } catch (err) {
         await this._rmrf(this.tmpDir);
         throw new Error(
@@ -704,10 +776,26 @@ class KernelManager {
     }
 
     // 5. 原子替换：tmp → kernel
-    await this._rmrf(this.kernelDir);
-    await fsp.rename(this.tmpDir, this.kernelDir);
+    // 若替换中途失败（磁盘/权限/进程占用），尽力从备份恢复旧内核，
+    // 避免内核目录缺失导致 dsh 完全不可用（找不到内核时下次启动会用内置内核修复）。
+    try {
+      await this._rmrf(this.kernelDir);
+      await fsp.rename(this.tmpDir, this.kernelDir);
+    } catch (err) {
+      await this._rmrf(this.tmpDir);
+      this.logger.warn(`应用新内核失败，尝试从备份恢复旧内核: ${err.message}`);
+      if (fs.existsSync(this.backupDir)) {
+        try {
+          await fsp.rename(this.backupDir, this.kernelDir);
+          progress(96, '内核替换失败，已从备份恢复旧内核，建议稍后重试更新。');
+        } catch (e2) {
+          this.logger.error(`恢复备份内核失败: ${e2.message}`);
+        }
+      }
+      throw new Error(`应用新内核失败: ${err.message}`);
+    }
 
-    progress(`内核更新完成：${oldInfo.version || '无'} → ${installedVersion}`);
+    progress(100, `内核更新完成：${oldInfo.version || '无'} → ${installedVersion}`);
     return { success: true, version: installedVersion };
   }
 
@@ -754,8 +842,19 @@ class KernelManager {
   // 内部工具
   // ---------------------------------------------------------------
 
-  /** 在指定目录执行 npm install */
-  _runNpmInstall(prefixDir, version, progress) {
+  /**
+   * 在指定目录执行 npm install
+   * 进度回调签名 (percent, message)，内部按阶段估算百分比：
+   *   下载阶段 3→70、安装阶段 70→88、完成 90，心跳兜底保证进度条持续走动。
+   * @param {string} prefixDir 安装目录
+   * @param {string} version 目标版本
+   * @param {function(number,string):void} progress
+   */
+  async _runNpmInstall(prefixDir, version, progress) {
+    // 解析下载源（auto 模式首次会测速探测），显式传给 npm，
+    // 避免用户机器上的 .npmrc 配置（如老旧的淘宝源）干扰
+    const registry = await this.getRegistryBase();
+
     return new Promise((resolve, reject) => {
       // 用 node 直接执行 npm 的 cli.js，彻底避开 .cmd/shell 及空格路径问题：
       // Windows 上 npm.cmd 是 .cmd 脚本，若其绝对路径含空格（如 "DSH Desktop" 目录），
@@ -769,6 +868,7 @@ class KernelManager {
         '--no-fund',
         '--no-update-notifier',
         '--loglevel=verbose',
+        '--registry', registry,
         `${DSH_PACKAGE}@${version}`,
       ];
       // 组装：优先 node + npm-cli.js；无内置时回退 npm.cmd（shell:false，Node 会自动处理 .cmd）
@@ -791,37 +891,55 @@ class KernelManager {
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       }
+      // 记录子进程，供 abortInstall() 在退出保护时终止
+      this._npmChild = child;
+
       let stdout = '';
       let stderr = '';
-      // 心跳：npm 下载大包时可能长时间无输出，定期提示"仍在下载"，避免用户误以为卡死
+      let pct = 3; // 从 installKernel 传入的 3% 起算
+      let phase = 'idle'; // 'idle' → 'download' → 'reify' → 'done'
+
+      // 向目标百分比渐进推进：差值越小步幅越小，保证不同依赖规模的包都能平滑前进
+      const bump = (target, message) => {
+        if (phase !== 'done') {
+          pct = target > pct ? Math.min(target, pct + Math.max(0.3, (target - pct) * 0.15)) : pct;
+          progress(Math.round(pct), message);
+        } else {
+          progress(Math.round(pct), message);
+        }
+      };
+
+      // 心跳：npm 下载大包时可能长时间无输出，定时推动进度条，避免用户误以为卡死
       let lastProgress = Date.now();
       const heartbeat = setInterval(() => {
-        if (Date.now() - lastProgress > 8000) {
-          lastProgress = Date.now();
-          if (typeof progress === 'function') progress('正在下载内核依赖…（大包下载可能需几分钟，请耐心等待）');
-        }
-      }, 8000);
+        lastProgress = Date.now();
+        if (phase === 'download') bump(70, '正在下载内核依赖…（大包下载可能需要几分钟，请耐心等待）');
+        else if (phase === 'reify') bump(88, '正在安装内核依赖，请稍候…');
+        else progress(Math.round(pct), '稍等，正在更新内核…');
+      }, 4000);
 
       const emitLine = (raw) => {
         const text = (raw || '').trim();
         if (!text) return;
-        // 解析 npm verbose 输出，转换为阶段化进度提示
-        if (/^npm http fetch GET/.test(text) || /^npm http fetch POST/.test(text)) {
-          // 下载请求 → 下载中阶段（不逐条刷屏，靠心跳节流）
-          progress('正在下载内核依赖…（阶段 1/3：下载）');
+        // 解析 npm verbose 输出，转换为阶段化进度提示与百分比推进
+        if (/^npm http fetch GET|^npm http fetch POST/.test(text)) {
+          if (phase === 'idle' || phase === 'download') { phase = 'download'; bump(70, '正在下载内核依赖（阶段 1/3：下载）…'); }
         } else if (/^npm http fetch 200|^npm http fetch 304/.test(text)) {
-          progress('正在下载内核依赖…（阶段 1/3：下载）');
+          if (phase === 'download') bump(70, '正在下载内核依赖（阶段 1/3：下载）…');
         } else if (/^npm timing reify|^npm warn reify|reify:/.test(text)) {
-          progress('正在安装内核依赖…（阶段 2/3：安装）');
+          if (phase !== 'reify') { phase = 'reify'; pct = Math.max(pct, 72); }
+          bump(88, '正在安装内核依赖（阶段 2/3：安装）…');
         } else if (/^added \d+ packages/.test(text)) {
-          progress(text + '（阶段 3/3：完成）');
+          phase = 'done'; pct = Math.max(pct, 90);
+          progress(Math.round(pct), text + '（阶段 3/3：完成）');
         } else if (/^up to date/.test(text)) {
-          progress(text);
+          phase = 'done'; pct = Math.max(pct, 88);
+          progress(Math.round(pct), text);
         } else if (/^npm notice|^npm timing|^npm verbose/.test(text)) {
           // 忽略 notice/timing/verbose 噪音
         } else {
           // 其他行（如错误）也透传
-          progress(text);
+          progress(Math.round(pct), text);
         }
         lastProgress = Date.now();
       };
@@ -836,10 +954,12 @@ class KernelManager {
       });
       child.on('error', (err) => {
         clearInterval(heartbeat);
+        this._npmChild = null;
         reject(new Error(`无法启动 npm: ${err.message}`));
       });
       child.on('close', (code) => {
         clearInterval(heartbeat);
+        this._npmChild = null;
         if (code === 0) {
           resolve();
         } else {
@@ -848,6 +968,29 @@ class KernelManager {
         }
       });
     });
+  }
+
+  /**
+   * 中止正在进行的内核安装（退出保护时调用）。
+   * 终止 npm 子进程并清理临时目录；安装只发生在 .tmp 中，
+   * 中止不会影响现役内核，仅可能留下需要下次启动修复的残余 tmp。
+   * @param {object} [opts]
+   * @param {boolean} [opts.removeTmp=true] 是否清理临时目录
+   */
+  abortInstall({ removeTmp = true } = {}) {
+    const child = this._npmChild;
+    this._npmChild = null;
+    if (child && child.exitCode == null && !child.killed) {
+      try {
+        child.kill();
+        this.logger.warn('内核安装已中止（用户退出应用）');
+      } catch (err) {
+        this.logger.warn(`中止 npm 子进程失败: ${err.message}`);
+      }
+    }
+    if (removeTmp) {
+      this._rmrf(this.tmpDir).then(() => {}).catch(() => {});
+    }
   }
 
   /**
@@ -900,4 +1043,4 @@ class KernelManager {
   }
 }
 
-module.exports = { KernelManager, DSH_PACKAGE, REGISTRY_BASE };
+module.exports = { KernelManager, DSH_PACKAGE, REGISTRY_BASE, CN_REGISTRY };

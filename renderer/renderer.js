@@ -23,6 +23,8 @@ const els = {
   settingsModal: $('#settings-modal'), settingsBackdrop: $('#settings-backdrop'),
   btnCloseSettings: $('#btn-close-settings'), btnSaveSettings: $('#btn-save-settings'),
   settingsSaveTip: $('#settings-save-tip'), kernelVersionInfo: $('#kernel-version-info'),
+  kernelUpdateBox: $('#kernel-update-box'), kernelUpdateBar: $('#kernel-update-bar'), kernelUpdateText: $('#kernel-update-text'),
+  setNpmRegistryMode: $('#set-npm-registry-mode'), setNpmRegistryCustom: $('#set-npm-registry-custom'), rowNpmRegistryCustom: $('#row-npm-registry-custom'),
   btnCheckUpdate: $('#btn-check-update'), btnInstallUpdate: $('#btn-install-update'), updateToast: $('#update-toast'),
   setAutoCheck: $('#set-auto-check'), setAutoInstall: $('#set-auto-install'),
   setCheckInterval: $('#set-check-interval'), setUpdateChannel: $('#set-update-channel'),
@@ -83,13 +85,53 @@ let wsReady = false;      // webview 页面加载完成
 let dshReady = false;     // 端口探活成功（dsh 服务真正就绪）
 let webviewVerifyTimer = null; // webview "完全加载" 校验轮询定时器
 let lastDshPort = 3080;
-// 内核更新操作锁：检查/安装互斥，进行中禁用所有更新按钮，防止重复点击
+// 内核更新（安装）操作锁：安装中禁用更新按钮与 dsh 启动按钮，防止重复点击/文件占用
 let updateBusy = false;
+// 检查更新锁：仅禁用检查/安装按钮，不影响 dsh 启动
+let checkBusy = false;
 
 function setUpdateButtonsDisabled(disabled) {
-  els.btnCheckUpdate.disabled = disabled || updateBusy;
+  els.btnCheckUpdate.disabled = disabled || updateBusy || checkBusy;
   // 该按钮同时承担"安装内核"职责（未安装时也应可点击），不再以 kernelInstalled 禁用
-  els.btnInstallUpdate.disabled = disabled || updateBusy || !currentSettings;
+  els.btnInstallUpdate.disabled = disabled || updateBusy || checkBusy || !currentSettings;
+}
+
+// ---------- 内核更新进度条展示 ----------
+
+/**
+ * 更新进度条：显示进度百分比 + 状态文字。
+ * @param {number|undefined} percent 0-100；undefined 时保持当前宽度
+ * @param {string} message 状态文字
+ * @param {string} [state] 'active'（流动动画）| 'done' | 'err'
+ */
+function setKernelUpdateProgress(percent, message, state) {
+  if (!els.kernelUpdateBox) return;
+  els.kernelUpdateBox.classList.remove('hidden');
+  els.kernelUpdateBox.classList.remove('active', 'done', 'err');
+  if (state) els.kernelUpdateBox.classList.add(state);
+  if (typeof percent === 'number') {
+    const p = Math.max(0, Math.min(100, Math.round(percent)));
+    if (els.kernelUpdateBar) els.kernelUpdateBar.style.width = p + '%';
+  }
+  if (els.kernelUpdateText) els.kernelUpdateText.textContent = (message || '') + (typeof percent === 'number' ? '（' + Math.max(0, Math.min(100, Math.round(percent))) + '%）' : '');
+}
+function hideKernelUpdateProgress() {
+  if (!els.kernelUpdateBox) return;
+  els.kernelUpdateBox.classList.add('hidden');
+  els.kernelUpdateBox.classList.remove('active', 'done', 'err');
+  if (els.kernelUpdateBar) els.kernelUpdateBar.style.width = '0%';
+  if (els.kernelUpdateText) els.kernelUpdateText.textContent = '';
+}
+
+/** 进入/退出"内核更新中"状态：锁定更新按钮、禁用 dsh 启动按钮 */
+function setKernelUpdating(busy) {
+  updateBusy = busy;
+  setUpdateButtonsDisabled(false);
+  if (busy) {
+    els.btnStart.disabled = true;
+  } else {
+    refreshStatus(); // 恢复按实际 dsh 状态刷新按钮
+  }
 }
 
 function setDot(c) { els.statusDot.className = 'dot ' + c; }
@@ -111,7 +153,8 @@ function loadWsUrl() {
 
 function applyDshState(dsh) {
   const running = !!(dsh && dsh.running);
-  els.btnStart.disabled = running;
+  // 内核更新中即使 dsh 已停止也禁用启动按钮（防止文件占用破坏更新）
+  els.btnStart.disabled = running || updateBusy;
   els.btnStop.disabled = !running;
   if (running) {
     lastDshPort = dsh.port || lastDshPort;
@@ -164,6 +207,9 @@ function applySettingsToForm() {
   els.setAutoInstall.checked = !!currentSettings.autoInstall;
   els.setCheckInterval.value = currentSettings.checkIntervalMinutes || 60;
   els.setUpdateChannel.value = currentSettings.updateChannel || 'latest';
+  els.setNpmRegistryMode.value = currentSettings.npmRegistryMode || 'auto';
+  els.setNpmRegistryCustom.value = currentSettings.npmRegistryCustom || '';
+  syncRegistryCustomRow();
   els.setAutoStartDsh.checked = !!currentSettings.autoStartDsh;
   els.setDshPort.value = currentSettings.dshPort || 3080;
   els.setTheme.value = currentSettings.themeMode || 'auto';
@@ -175,6 +221,12 @@ function applySettingsToForm() {
   els.setAppAutoCheck.checked = !!currentSettings.appAutoCheckUpdate;
 }
 
+/** 自定义源行：仅当选择"自定义"时显示 */
+function syncRegistryCustomRow() {
+  if (!els.rowNpmRegistryCustom || !els.setNpmRegistryMode) return;
+  els.rowNpmRegistryCustom.classList.toggle('hidden', els.setNpmRegistryMode.value !== 'custom');
+}
+
 async function handleStart() {
   // 点击瞬间立即反馈：禁用按钮 + 显示启动中 + 重置就绪标记（防重复点击）
   els.btnStart.disabled = true;
@@ -184,6 +236,9 @@ async function handleStart() {
     const res = await api.startDsh({ mode: 'web', port: lastDshPort });
     if (res && res.ok === false && res.reason === 'kernel-not-installed') {
       showStage('failed'); els.stageFailedText.textContent = '内核未安装，请到设置中安装内核。';
+    } else if (res && res.ok === false && res.reason === 'kernel-updating') {
+      showToast('error', '内核更新中，完成后即可启动 dsh。', 5000);
+      refreshStatus();
     }
   } catch (err) {
     showStage('failed'); els.stageFailedText.textContent = err.message;
@@ -213,8 +268,8 @@ function showToast(t, text, ms) {
 }
 
 async function handleCheckUpdate() {
-  if (updateBusy) return; // 更新进行中，忽略
-  updateBusy = true;
+  if (checkBusy || updateBusy) return; // 更新/检查进行中，忽略
+  checkBusy = true;
   setUpdateButtonsDisabled(true);
   els.btnCheckUpdate.textContent = '检查中…';
   try {
@@ -225,7 +280,7 @@ async function handleCheckUpdate() {
     else showToast('info', res.local ? '已是最新版本（' + res.local + '）。' : '未安装内核。');
   } catch (err) { showToast('error', '检查更新失败：' + err.message); }
   finally {
-    updateBusy = false;
+    checkBusy = false;
     els.btnCheckUpdate.textContent = '检查更新';
     setUpdateButtonsDisabled(false);
     refreshStatus();
@@ -234,18 +289,29 @@ async function handleCheckUpdate() {
 
 async function handleInstallUpdate() {
   if (updateBusy) return; // 更新进行中，忽略
-  updateBusy = true;
-  setUpdateButtonsDisabled(true);
-  showToast('info', '正在安装内核更新…');
+  setKernelUpdating(true);
+  setKernelUpdateProgress(0, '正在准备更新内核…', 'active');
   try {
+    // 进度与最终结果主要由 update:install-* 事件驱动进度条显示；
+    // 这里仅兜底处理不会触发事件的分支（如"已是最新"）
     const res = await api.installUpdate();
-    if (res && res.ok) showToast('ok', '内核已更新至 v' + res.version);
-    else showToast('error', '更新失败：' + ((res && (res.error || res.reason)) || '未知'));
-  } catch (err) { showToast('error', '更新失败：' + err.message); }
-  finally {
-    updateBusy = false;
-    setUpdateButtonsDisabled(false);
-    refreshStatus();
+    if (res && res.reason === 'no-update') {
+      hideKernelUpdateProgress();
+      showToast('info', '已是最新版本。');
+    } else if (res && res.reason === 'installing') {
+      hideKernelUpdateProgress();
+      showToast('info', '已有更新任务进行中。');
+    } else if (res && !res.ok && res.reason === 'kernel-updating') {
+      hideKernelUpdateProgress();
+      showToast('error', '内核更新中，请稍候。');
+    }
+  } catch (err) {
+    // invoke 抛错（事件未发出的异常路径）：补一次错误提示
+    setKernelUpdateProgress(undefined, '更新失败：' + err.message, 'err');
+    setTimeout(hideKernelUpdateProgress, 5000);
+    showToast('error', '更新失败：' + err.message);
+  } finally {
+    setKernelUpdating(false);
   }
 }
 
@@ -289,7 +355,10 @@ async function handleSaveSettings() {
   const patch = {
     autoCheckUpdate: els.setAutoCheck.checked, autoInstall: els.setAutoInstall.checked,
     checkIntervalMinutes: Math.max(10, parseInt(els.setCheckInterval.value, 10) || 60),
-    updateChannel: els.setUpdateChannel.value, autoStartDsh: els.setAutoStartDsh.checked,
+    updateChannel: els.setUpdateChannel.value,
+    npmRegistryMode: els.setNpmRegistryMode.value,
+    npmRegistryCustom: els.setNpmRegistryCustom.value.trim(),
+    autoStartDsh: els.setAutoStartDsh.checked,
     dshPort: parseInt(els.setDshPort.value, 10) || 3080,
     themeMode: els.setTheme.value,
     appUpdateOwner, appUpdateRepo,
@@ -308,7 +377,10 @@ async function handleSaveSettings() {
     if (res && res.dshNeedsRestart) {
       showToast('info', `端口已改为 ${patch.dshPort}，正在重启 dsh 以应用新端口…`, 5000);
       try {
-        await api.restartDsh({ mode: 'web', port: patch.dshPort });
+        const rr = await api.restartDsh({ mode: 'web', port: patch.dshPort });
+        if (!(rr && rr.ok) && rr && rr.reason === 'kernel-updating') {
+          showToast('error', '内核更新中，端口将在更新完成后由您手动重启生效。', 6000);
+        }
       } catch (err) {
         showToast('error', '重启 dsh 失败：' + err.message);
       }
@@ -321,8 +393,15 @@ async function handleSaveSettings() {
 async function handleRemoveKernel() {
   if (!confirm('确定移除本地内核吗？')) return;
   if (!confirm('再次确认：移除后将无法启动 dsh。')) return;
-  try { await api.removeKernel(); showToast('info', '内核已移除'); refreshStatus(); }
-  catch (err) { showToast('error', '移除内核失败：' + err.message); }
+  try {
+    const res = await api.removeKernel();
+    if (res && res.ok === false && res.reason === 'kernel-updating') {
+      showToast('error', '内核更新中，暂时无法移除内核。');
+    } else {
+      showToast('info', '内核已移除');
+    }
+    refreshStatus();
+  } catch (err) { showToast('error', '移除内核失败：' + err.message); }
 }
 
 // ---------- 主题动态跟随 dsh 页面（明暗主题） ----------
@@ -549,6 +628,8 @@ function bindEvents() {
   els.btnStageRetry.addEventListener('click', handleStart);
   els.btnCheckUpdate.addEventListener('click', handleCheckUpdate);
   els.btnInstallUpdate.addEventListener('click', handleInstallUpdate);
+  // 下载源选择联动：选"自定义"时显示地址输入框
+  els.setNpmRegistryMode.addEventListener('change', syncRegistryCustomRow);
   els.btnSaveSettings.addEventListener('click', handleSaveSettings);
   els.btnRemoveKernel.addEventListener('click', handleRemoveKernel);
   els.btnOpenNodeDownload.addEventListener('click', () => api.openNodeDownload());
@@ -606,10 +687,32 @@ function bindEvents() {
     showToast('error', info && info.reason ? info.reason : 'dsh 异常退出', 8000);
   });
 
-  api.onUpdateAvailable((info) => { if (info.hasUpdate) { els.btnInstallUpdate.disabled = updateBusy; showToast('info', '发现新版本 ' + info.remote + '，可到设置中更新。'); } });
-  api.onUpdateInstallProgress((m) => showToast('info', m, 3000));
-  api.onUpdateInstallDone((r) => { showToast('ok', '内核已更新至 v' + (r.version || '')); refreshStatus(); });
-  api.onUpdateInstallError((m) => showToast('error', '更新失败：' + m));
+  api.onUpdateAvailable((info) => { if (info.hasUpdate) { els.btnInstallUpdate.disabled = updateBusy || checkBusy; showToast('info', '发现新版本 ' + info.remote + '，可到设置中更新。'); } });
+  // 内核更新（自动安装/手动安装都会触发）：进入更新中状态，进度走内嵌进度条
+  api.onUpdateInstallStart(() => {
+    setKernelUpdating(true);
+    setKernelUpdateProgress(0, '正在准备更新内核…', 'active');
+  });
+  api.onUpdateInstallProgress((m) => {
+    if (m && typeof m === 'object' && !Array.isArray(m)) {
+      setKernelUpdateProgress(m.percent, m.message, 'active');
+    } else if (typeof m === 'string') {
+      // 兼容旧版纯文本进度
+      setKernelUpdateProgress(undefined, m, 'active');
+    }
+  });
+  api.onUpdateInstallDone((r) => {
+    setKernelUpdateProgress(100, '内核已更新至 v' + (r.version || '?'), 'done');
+    setTimeout(hideKernelUpdateProgress, 3500);
+    showToast('ok', '内核已更新至 v' + (r.version || ''));
+    setKernelUpdating(false);
+  });
+  api.onUpdateInstallError((m) => {
+    setKernelUpdateProgress(undefined, '更新失败：' + m, 'err');
+    setTimeout(hideKernelUpdateProgress, 5000);
+    showToast('error', '更新失败：' + m);
+    setKernelUpdating(false);
+  });
 
   api.onKernelImportProgress((m) => { showStage('loading'); setStageLoading(m); });
   api.onKernelImportDone((info) => { setStatus('内核就绪，点击启动', 'yellow'); showToast('ok', '内置内核 v' + (info.version || '?') + ' 导入完成'); refreshStatus(); });
