@@ -159,15 +159,22 @@ function applyDshState(dsh) {
   if (running) {
     lastDshPort = dsh.port || lastDshPort;
     els.statusExtra.textContent = 'PID ' + (dsh.pid || '') + ' · 端口 ' + lastDshPort;
-    if (!dshReady) {
+    // 就绪状态以主进程端口探活结果（dsh.ready）为准：
+    // macOS 关窗后应用驻留后台、dsh 继续运行，重开窗口时新的渲染层
+    // 没有收到过 dsh:ready 一次性事件，靠状态快照里的 ready 恢复加载工作台。
+    if (!dsh.ready) {
+      dshReady = false;
       // 进程在但服务未就绪：保持"启动中"，不加载 webview（避免闪"无法连接"失败页）
       setStatus('dsh 启动中', 'yellow');
       showStage('loading'); setStageLoading('dsh 服务启动中，请稍候…');
-    } else if (!wsReady) {
-      setStatus('dsh 运行中', 'green');
-      showStage('loading'); setStageLoading('正在加载工作台…'); loadWsUrl();
     } else {
-      setStatus('dsh 运行中', 'green');
+      dshReady = true;
+      if (!wsReady) {
+        setStatus('dsh 运行中', 'green');
+        showStage('loading'); setStageLoading('正在加载工作台…'); loadWsUrl();
+      } else {
+        setStatus('dsh 运行中', 'green');
+      }
     }
   } else {
     setStatus('dsh 已停止', 'gray');
@@ -660,19 +667,15 @@ function bindEvents() {
   }
 
   api.onDshState((st) => {
-    if (st && st.running) {
-      // 进程已启动但服务可能未就绪：显示"启动中"，不急于加载 webview
-      els.btnStart.disabled = true; els.btnStop.disabled = false;
-      lastDshPort = st.port || lastDshPort;
-      setStatus('dsh 启动中', 'yellow');
-      els.statusExtra.textContent = 'PID ' + (st.pid || '') + ' · 端口 ' + lastDshPort;
-      showStage('loading'); setStageLoading('dsh 服务启动中，请稍候…');
-    } else { applyDshState(st); }
+    // 统一走 applyDshState：启动中/就绪/停止全部由状态（含 ready 探活结果）驱动
+    if (st) applyDshState(st);
   });
   // 端口探活成功（服务就绪）后才加载 webview → 期间一直显示"启动中"，避免黑屏
   api.onDshReady((info) => {
     dshReady = true;
     setStatus('dsh 运行中', 'green'); els.statusExtra.textContent = '端口 ' + (info && info.port);
+    // 若状态推送已抢先加载过工作台，避免重复加载
+    if (wsReady) return;
     showStage('loading'); setStageLoading('正在加载工作台…'); loadWsUrl();
   });
   api.onDshStartProgress((m) => { showStage('loading'); setStageLoading(m); });

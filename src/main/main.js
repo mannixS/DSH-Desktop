@@ -155,6 +155,16 @@ function bootstrap() {
 
     mainWindow.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
 
+    // 窗口（重新）创建后立即把当前 dsh 状态推给渲染层：
+    // macOS 关闭窗口后应用仍在后台、dsh 继续运行，重开窗口时若只靠
+    // 首次启动的 dsh:ready 一次性事件，新窗口会永远卡在"内核加载中"。
+    mainWindow.webContents.on('did-finish-load', () => {
+      if (dshHost.running) {
+        notifyRenderer('dsh:state', dshHost.status);
+        if (dshHost.ready) notifyRenderer('dsh:ready', { port: dshHost.port });
+      }
+    });
+
     // 外链交给系统浏览器（含 dsh webview 的 guest 页面）
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
       shell.openExternal(url);
@@ -162,10 +172,15 @@ function bootstrap() {
     });
 
     // 拦截所有 webContents（含 webview 内嵌页面）的 window.open：
-    // webview 的外链也交给系统浏览器，避免开出裸的 Electron 窗口
+    // webview 的外链也交给系统浏览器，避免开出裸的 Electron 窗口。
+    // 但 dsh UI 打开自身地址（127.0.0.1:端口）的新窗口/新标签时直接拒绝——
+    // 否则 dsh 的"browser UI alias"会把主页在系统浏览器里再开一份。
     app.on('web-contents-created', (_event, contents) => {
       if (contents.getType() === 'webview') {
         contents.setWindowOpenHandler(({ url }) => {
+          if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(url) || /^https?:\/\/127\.0\.0\.1:\d+$/i.test(url)) {
+            return { action: 'deny' };
+          }
           if (/^https?:\/\//i.test(url)) shell.openExternal(url);
           return { action: 'deny' };
         });

@@ -35,6 +35,8 @@ class DshHost {
     this.child = null;
     this.running = false;
     this.stopping = false;
+    /** Web UI 是否已就绪（端口探活 200 后置 true，供窗口重建/状态快照使用） */
+    this.ready = false;
     /** dsh 自身输出的最近 stderr 缓冲（用于异常退出诊断） */
     this._stderrBuf = [];
     /** 日志回调：{ onLog?: (line: string) => void, onExit?: (code: number|null) => void } */
@@ -76,6 +78,7 @@ class DshHost {
     }
     // 每次启动重新解析端口，避免残留上次会话的 resolvedPort
     this.resolvedPort = null;
+    this.ready = false;
 
     const portNum = port || this.port;
     const binPath = this.dshBinPath;
@@ -176,12 +179,14 @@ class DshHost {
     this.child.on('error', (err) => {
       this.logger.error(`dsh 进程错误: ${err.message}`);
       this.running = false;
+      this.ready = false;
       this.events.onError?.(`dsh 进程错误: ${err.message}`);
     });
 
     this.child.on('exit', (code, signal) => {
       this.logger.info(`dsh 进程退出 (code=${code}, signal=${signal})`);
       this.running = false;
+      this.ready = false;
       this.child = null;
       this.resolvedPort = null;
       this.events.onExit?.(code);
@@ -227,6 +232,7 @@ class DshHost {
         if (res.status >= 200 && res.status < 500 && this.running && this.child && this.child.exitCode === null) {
           clearInterval(probeTimer);
           this.logger.info(`dsh Web UI 就绪（端口 ${port}）`);
+          this.ready = true;
           this.events.onReady?.(port);
         }
       } catch {
@@ -245,6 +251,7 @@ class DshHost {
   stop({ force = false, timeout = 4000 } = {}) {
     if (!this.child) {
       this.running = false;
+      this.ready = false;
       this.stopping = false;
       this.resolvedPort = null;
       return Promise.resolve({ ok: true, alreadyStopped: true });
@@ -255,6 +262,7 @@ class DshHost {
     return new Promise((resolve) => {
       const done = () => {
         this.running = false;
+        this.ready = false;
         this.child = null;
         this.stopping = false;
         this.resolvedPort = null;
@@ -408,6 +416,7 @@ class DshHost {
   get status() {
     return {
       running: this.running,
+      ready: this.ready,
       pid: this.child ? this.child.pid : null,
       port: this.port,
       dshHome: this.dshHome,
