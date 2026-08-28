@@ -300,13 +300,14 @@ class KernelManager {
    *
    * @param {string|null} [bundledKernelDir] 内置内核目录（默认 process.resourcesPath/kernel）
    * @param {object} [options]
-   * @param {function(string):void} [options.onProgress] 进度回调
+   * @param {function({message:string,percent:number}):void} [options.onProgress] 进度回调（结构化对象）
    * @returns {Promise<{ imported: boolean, version: string|null, reason?: string, error?: string }>}
    */
   async importBundledKernel(bundledKernelDir, { onProgress } = {}) {
-    const progress = (msg) => {
-      this.logger.info(msg);
-      if (typeof onProgress === 'function') onProgress(msg);
+    const progress = (percent, message) => {
+      const pct = Math.max(0, Math.min(100, Math.round(percent)));
+      this.logger.info(message);
+      if (typeof onProgress === 'function') onProgress({ message, percent: pct });
     };
 
     const bundled = await this.getBundledKernelInfo(bundledKernelDir);
@@ -323,6 +324,18 @@ class KernelManager {
     //  3. 内置版本等于本地，但尚未对齐过 → 覆盖一次（修复历史上同版本的
     //     缺损内核，如早期坏归档导入的 rc.7；用对齐标记去重，避免每次启动重复解压）
     //  4. 否则（本地更高，或已对齐）→ 尊重本地已装版本
+    // 删除旧内核目录可能很慢（node_modules 文件众多，Windows 上尤其明显，
+    // 实测动辄 10-30 秒）。期间以心跳持续推送进度提示，避免界面长时间无反馈。
+    const rmWithHeartbeat = async (target, pct, message) => {
+      progress(pct, message);
+      const hb = setInterval(() => progress(pct, message), 3000);
+      try {
+        await this._rmrf(target);
+      } finally {
+        clearInterval(hb);
+      }
+    };
+
     const local = await this.getLocalKernelInfo();
     let shouldReplace = false;
     let alignReason = '';
@@ -337,17 +350,17 @@ class KernelManager {
       const notAligned = mark.version !== bundled.version;
       if (!runnable) {
         this.logger.warn(`本地内核 v${local.version} 无法运行（可能导入不完整），将使用内置内核自动修复...`);
-        progress(`检测到本地内核损坏，正在使用内置内核 v${bundled.version} 修复...`);
+        progress(2, `检测到本地内核损坏，正在使用内置内核 v${bundled.version} 修复...`);
         shouldReplace = true;
         alignReason = 'broken';
       } else if (cmp > 0) {
         this.logger.info(`内置内核 v${bundled.version} 高于本地 v${local.version}，自动对齐到内置版本...`);
-        progress(`检测到内置内核 v${bundled.version} 更新，正在自动对齐（本地 v${local.version}）...`);
+        progress(2, `检测到内置内核 v${bundled.version} 更新，正在自动对齐（本地 v${local.version}）...`);
         shouldReplace = true;
         alignReason = 'bundled-newer';
       } else if (cmp === 0 && notAligned) {
         this.logger.info(`本地内核 v${local.version} 与内置同版本但未对齐过，用内置内核覆盖对齐...`);
-        progress(`正在用内置内核 v${bundled.version} 覆盖对齐本地内核...`);
+        progress(2, `正在用内置内核 v${bundled.version} 覆盖对齐本地内核...`);
         shouldReplace = true;
         alignReason = 'align-once';
       } else {
@@ -355,7 +368,7 @@ class KernelManager {
       }
     }
     if (shouldReplace) {
-      await this._rmrf(this.kernelDir);
+      await rmWithHeartbeat(this.kernelDir, 3, '正在清理旧内核目录，准备对齐到内置版本（文件较多时可能需要一点时间）…');
     }
 
     const archivePath = path.join(bundled.dir, 'kernel.tar.gz');
@@ -366,21 +379,26 @@ class KernelManager {
       return { imported: false, error: '内置内核资源缺失（既无归档也无源目录）' };
     }
 
-    progress(`正在导入内置内核 v${bundled.version}...`);
+    progress(5, `正在导入内置内核 v${bundled.version}...`);
 
     // 解压/复制到临时目录，校验通过后原子替换，避免中途失败留下半成品
     const importTmp = `${this.kernelDir}.import`;
-    await this._rmrf(importTmp);
-    await this._rmrf(this.kernelDir);
+    await rmWithHeartbeat(importTmp, 4, '正在准备内核导入目录…');
+    await rmWithHeartbeat(this.kernelDir, 4, '正在准备内核导入目录…');
 
     try {
       await fsp.mkdir(importTmp, { recursive: true });
       if (hasArchive) {
-        progress('正在解压内置内核（单文件归档）...');
-        await this._extractArchive(archivePath, importTmp);
-        progress('内置内核解压完成，正在校验...');
+        progress(8, '正在解压内置内核（单文件归档），请稍候…');
+        // 解压期间定期上报进度（tar 本身静默，靠心跳推进百分比）
+        await this._extractArchive(archivePath, importTmp, (pct, msg) => progress(pct, msg));
+        progress(88, '内置内核解压完成，正在校验…');
+        progress(93, '内置内核校验通过，正在安装…');
       } else {
+        progress(10, '正在复制内置内核文件…');
         await this._copyRecursive(bundled.dir, importTmp, progress);
+        progress(88, '内置内核文件复制完成，正在校验…');
+        progress(93, '内置内核校验通过，正在安装…');
       }
 
       // 校验临时目录中的内核可运行（入口文件存在）
@@ -388,6 +406,7 @@ class KernelManager {
       await fsp.access(tmpBin, fs.constants.R_OK);
 
       // 原子替换：importTmp → kernelDir
+      progress(97, '正在应用内置内核…');
       await fsp.rename(importTmp, this.kernelDir);
     } catch (err) {
       this.logger.error(`导入内置内核失败: ${err.message}`);
@@ -403,7 +422,7 @@ class KernelManager {
       return { imported: false, error: '内置内核校验失败' };
     }
 
-    progress(`内置内核 v${bundled.version} 导入完成`);
+    progress(100, `内置内核 v${bundled.version} 导入完成`);
     // 记录已用内置内核对齐（避免同版本场景每次启动重复覆盖）
     await this._writeAlignMark(bundled.version);
     return { imported: true, version: bundled.version };
@@ -411,10 +430,13 @@ class KernelManager {
 
   /**
    * 用系统 tar 解压归档到目标目录
+   * tar 静默执行不输出进度，通过心跳推进百分比（8→85），
+   * 保证解压大归档期间界面仍有持续提示。
    * @param {string} archive 归档路径（.tar.gz）
    * @param {string} dest 目标目录（已存在）
+   * @param {function(number,string):void} [onTick] 进度回调 (percent, message)
    */
-  _extractArchive(archive, dest) {
+  _extractArchive(archive, dest, onTick) {
     return new Promise((resolve, reject) => {
       const tarCmd = process.platform === 'win32' ? 'tar.exe' : 'tar';
       // 规避 Windows bsdtar 把 "C:\..." 盘符路径误判为远程主机的问题：
@@ -425,10 +447,21 @@ class KernelManager {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      // tar 静默执行：心跳兜底推进百分比（8→85），确保解压期间界面持续有提示
+      let pct = 8;
+      const tick = typeof onTick === 'function' ? onTick : () => {};
+      const heartbeat = setInterval(() => {
+        pct = Math.min(85, pct + Math.max(0.4, (85 - pct) * 0.04));
+        tick(Math.round(pct), '正在解压内置内核（单文件归档），可能需要 1-2 分钟，请耐心等待…');
+      }, 3000);
       let stderr = '';
       child.stderr.on('data', (d) => (stderr += d.toString()));
-      child.on('error', (err) => reject(new Error(`无法启动 tar: ${err.message}`)));
+      child.on('error', (err) => {
+        clearInterval(heartbeat);
+        reject(new Error(`无法启动 tar: ${err.message}`));
+      });
       child.on('close', (code) => {
+        clearInterval(heartbeat);
         if (code === 0) {
           resolve();
         } else {
@@ -441,17 +474,19 @@ class KernelManager {
   /**
    * 稳健的递归目录复制：
    * - 跳过符号链接 / junction（避免 Windows 上 .bin 链接导致复制失败或死循环）
-   * - 通过回调上报进度（每 500 个文件）
+   * - 通过回调上报结构化进度（每 500 个文件，百分比以渐进方式推进）
    * @param {string} src 源目录
    * @param {string} dest 目标目录
-   * @param {function(string):void} [onProgress]
+   * @param {function(number,string):void} [onProgress] (percent, message)
    */
   async _copyRecursive(src, dest, onProgress) {
     let count = 0;
+    let pct = 10;
     const tick = () => {
       count++;
       if (count % 500 === 0 && typeof onProgress === 'function') {
-        onProgress(`正在导入内置内核...（已复制 ${count} 个文件）`);
+        pct = Math.min(85, pct + Math.max(0.3, (85 - pct) * 0.06));
+        onProgress(Math.round(pct), `正在复制内置内核文件…（已复制 ${count} 个文件）`);
       }
     };
 

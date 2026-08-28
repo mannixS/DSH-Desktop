@@ -64,6 +64,30 @@ class DshHost {
   }
 
   /**
+   * 当前内核的 dsh web 是否支持 --no-open（不自动打开默认浏览器）
+   * @returns {boolean}
+   */
+  _webSupportsNoOpen() {
+    try {
+      // dsh web 在 0.1.1-rc.2 起支持 --no-open（不打开默认浏览器）；
+      // 旧版本不认识该参数，传入会导致 commander 报错，因此探测启动文件内容。
+      const startup = path.join(
+        this.kernelDir,
+        'node_modules',
+        '@deepseek-ai',
+        'dsh-web-app',
+        'lib',
+        'startup.js'
+      );
+      if (!fs.existsSync(startup)) return false;
+      const src = fs.readFileSync(startup, 'utf8');
+      return src.includes('--no-open');
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * 启动 dsh 进程
    * @param {object} [options]
    * @param {string} [options.mode='web'] 运行模式：web / tui / headless
@@ -107,6 +131,10 @@ class DshHost {
       const usePort = this.resolvedPort || portNum;
       if (usePort) {
         cliArgs.push('--port', String(usePort));
+      }
+      // 客户端自身用 webview 承载 dsh UI，禁止 dsh 再调起系统默认浏览器
+      if (this._webSupportsNoOpen()) {
+        cliArgs.push('--no-open');
       }
     } else if (mode === 'tui') {
       cliArgs.push('--profile', 'tui');

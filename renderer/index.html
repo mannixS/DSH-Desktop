@@ -40,6 +40,10 @@
     </div>
     <div class="stage-overlay hidden" id="stage-loading">
       <div class="ws-spinner"></div>
+      <!-- 内置内核导入/对齐进度条（启动阶段全屏提示） -->
+      <div class="stage-import-bar hidden" id="stage-import-bar">
+        <div class="update-bar"><div class="update-bar-fill" id="stage-import-bar-fill"></div></div>
+      </div>
       <p id="stage-loading-text">正在启动 dsh&#8230;</p>
     </div>
     <div class="stage-overlay ws-error hidden" id="stage-failed">

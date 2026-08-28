@@ -173,6 +173,10 @@ body[data-platform="mac"] .titlebar { padding-right:14px; }
 .kernel-update-box.done .update-bar-fill { background:var(--accent); animation:none; }
 .kernel-update-box.err .update-bar-fill { background:var(--danger); animation:none; }
 
+/* 启动阶段内置内核导入/对齐进度条 */
+.stage-import-bar { width:min(420px,70%); }
+.stage-import-bar .update-bar { height:6px; }
+
 .hidden { display:none !important; }
 ::-webkit-scrollbar { width:8px; height:8px; }
 ::-webkit-scrollbar-thumb { background:#333a4b; border-radius:4px; }

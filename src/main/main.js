@@ -29,6 +29,11 @@ function bootstrap() {
   let installingUpdate = false;
   // 内核更新期间内核目录被锁定：禁止启动 dsh（避免文件占用导致替换失败/内核损坏）
   let kernelLocked = false;
+  // 内置内核导入/对齐中的主进程侧状态：
+  // 启动阶段窗口可能尚未加载完成，import 进度事件会提前发出并丢失；
+  // 主进程持久跟踪导入状态，窗口 did-finish-load / 状态快照时重放，确保 UI 不错位。
+  let kernelImporting = false;
+  let kernelImportProgress = null;
 
   // 各模块数据目录
   const userData = app.getPath('userData');
@@ -162,6 +167,14 @@ function bootstrap() {
       if (dshHost.running) {
         notifyRenderer('dsh:state', dshHost.status);
         if (dshHost.ready) notifyRenderer('dsh:ready', { port: dshHost.port });
+      }
+      // 内置内核导入/对齐中：重放最近一次进度，让新就绪的窗口恢复全屏进度提示
+      // （窗口若比导入开始晚就绪，小概率事件会导致冷启动时跑到空态"内核未启动"）
+      if (kernelImporting) {
+        notifyRenderer(
+          'kernel:import-progress',
+          kernelImportProgress || { message: '正在准备导入内置内核…', percent: 0 }
+        );
       }
     });
 
@@ -314,17 +327,33 @@ function bootstrap() {
         pushLog('[kernel]', '未发现安装包内置内核（开发模式或未预下载），可手动点击"更新内核"安装。');
         return;
       }
-      const result = await kernelManager.importBundledKernel(undefined, {
-        onProgress: (msg) => notifyRenderer('kernel:import-progress', msg),
-      });
-      if (result.imported) {
-        pushLog('[kernel]', `已导入安装包内置内核 v${result.version}，可直接使用。`);
-        notifyRenderer('kernel:import-done', { version: result.version });
-      } else if (result.error) {
-        pushLog('[kernel]', `内置内核导入失败: ${result.error}`);
-        notifyRenderer('kernel:import-error', result.error);
-      } else if (result.reason === 'already-installed') {
-        pushLog('[kernel]', `用户目录已有内核 v${result.version}，跳过内置导入。`);
+      // 导入/对齐期间内核目录会被替换，锁住 dsh 启动，避免文件占用破坏导入
+      kernelLocked = true;
+      // 记录主进程侧导入状态：即使渲染窗口尚未就绪（进度事件丢失），
+      // 也能通过 did-finish-load 重放 / 状态快照让 UI 恢复正确的导入中提示
+      kernelImporting = true;
+      kernelImportProgress = null;
+      try {
+        const result = await kernelManager.importBundledKernel(undefined, {
+          onProgress: (msg) => {
+            kernelImportProgress = msg;
+            notifyRenderer('kernel:import-progress', msg);
+          },
+        });
+        if (result.imported) {
+          pushLog('[kernel]', `已导入安装包内置内核 v${result.version}，可直接使用。`);
+          notifyRenderer('kernel:import-done', { version: result.version });
+        } else if (result.error) {
+          pushLog('[kernel]', `内置内核导入失败: ${result.error}`);
+          notifyRenderer('kernel:import-error', result.error);
+        } else if (result.reason === 'already-installed') {
+          pushLog('[kernel]', `用户目录已有内核 v${result.version}，跳过内置导入。`);
+          notifyRenderer('kernel:import-done', { version: result.version, skipped: true });
+        }
+      } finally {
+        kernelImporting = false;
+        kernelImportProgress = null;
+        kernelLocked = false;
       }
     } catch (err) {
       pushLog('[kernel]', `内置内核导入异常: ${err.message}`);
@@ -353,6 +382,9 @@ function bootstrap() {
       kernel: local,
       kernelRunnable: local.installed ? await kernelManager.isKernelRunnable() : false,
       bundledKernel: { bundled: bundled.bundled, version: bundled.version },
+      // 启动阶段内置内核导入/对齐状态：渲染层靠它恢复导入进度 UI（事件丢失兜底）
+      kernelImporting,
+      kernelImportProgress,
       nodeEnv: env,
       dsh: dshHost.status,
       settings: settings.data,

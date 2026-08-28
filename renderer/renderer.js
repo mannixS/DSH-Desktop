@@ -14,6 +14,7 @@ const els = {
   stageFailed: $('#stage-failed'), stageFailedText: $('#stage-failed-text'),
   stageFrame: $('#stage-frame'), dshWebview: $('#dsh-webview'),
   loadingText: $('#stage-loading-text'), btnStageRetry: $('#btn-stage-retry'),
+  stageImportBar: $('#stage-import-bar'), stageImportBarFill: $('#stage-import-bar-fill'),
   statusDot: $('#status-dot'), statusText: $('#status-text'), statusExtra: $('#status-extra'),
   statusVersion: $('#status-version'),   btnStart: $('#btn-start-dsh'), btnStop: $('#btn-stop-dsh'),
   btnOpenSettings: $('#btn-open-settings'),
@@ -89,6 +90,23 @@ let lastDshPort = 3080;
 let updateBusy = false;
 // 检查更新锁：仅禁用检查/安装按钮，不影响 dsh 启动
 let checkBusy = false;
+// 内置内核导入/对齐中：抑制 15s 轮询把启动遮罩重置为"空态"并禁用启动按钮
+let kernelImporting = false;
+
+function setStageLoading(t) { els.loadingText.textContent = t || '正在启动 dsh…'; }
+
+/** 启动阶段的内核导入进度：更新全屏提示文字 + 进度条 */
+function setKernelImport(percent, message) {
+  setStageLoading((message || '') + (typeof percent === 'number' ? '（' + percent + '%）' : ''));
+  if (els.stageImportBar) els.stageImportBar.classList.remove('hidden');
+  if (els.stageImportBarFill && typeof percent === 'number') {
+    els.stageImportBarFill.style.width = percent + '%';
+  }
+}
+function hideKernelImport() {
+  if (els.stageImportBar) els.stageImportBar.classList.add('hidden');
+  if (els.stageImportBarFill) els.stageImportBarFill.style.width = '0%';
+}
 
 function setUpdateButtonsDisabled(disabled) {
   els.btnCheckUpdate.disabled = disabled || updateBusy || checkBusy;
@@ -142,7 +160,6 @@ function showStage(s) {
   els.stageFailed.classList.toggle('hidden', s !== 'failed');
   els.stageFrame.classList.toggle('hidden', s !== 'frame');
 }
-function setStageLoading(t) { els.loadingText.textContent = t || '正在启动 dsh…'; }
 
 function loadWsUrl() {
   if (!els.dshWebview) return;
@@ -153,8 +170,8 @@ function loadWsUrl() {
 
 function applyDshState(dsh) {
   const running = !!(dsh && dsh.running);
-  // 内核更新中即使 dsh 已停止也禁用启动按钮（防止文件占用破坏更新）
-  els.btnStart.disabled = running || updateBusy;
+  // 内核更新/导入中即使 dsh 已停止也禁用启动按钮（防止文件占用破坏内核）
+  els.btnStart.disabled = running || updateBusy || kernelImporting;
   els.btnStop.disabled = !running;
   if (running) {
     lastDshPort = dsh.port || lastDshPort;
@@ -176,6 +193,10 @@ function applyDshState(dsh) {
         setStatus('dsh 运行中', 'green');
       }
     }
+  } else if (kernelImporting) {
+    // 内置内核导入/对齐中：保持全屏进度提示，不被 15s 轮询重置为"空态"
+    setStatus('正在导入内核…', 'yellow');
+    showStage('loading');
   } else {
     setStatus('dsh 已停止', 'gray');
     els.statusExtra.textContent = '';
@@ -202,6 +223,26 @@ async function refreshStatus() {
     els.btnOpenNodeDownload.hidden = !(s.nodeEnv && !s.nodeEnv.meetsRequirement);
     // 更新按钮状态由锁统一管理（更新进行中保持禁用）
     setUpdateButtonsDisabled(false);
+    // 主进程侧内置内核导入/对齐中：若窗口就绪过晚导致 import 进度事件丢失，
+    // 靠状态快照恢复导入提示（置于 applyDshState 之前，避免被重置为空态）
+    if (s.kernelImporting) {
+      if (!kernelImporting) {
+        kernelImporting = true;
+        els.btnStart.disabled = true;
+        showStage('loading');
+      }
+      const p = s.kernelImportProgress;
+      if (p && typeof p === 'object' && !Array.isArray(p)) {
+        setKernelImport(p.percent, p.message);
+      } else {
+        setKernelImport(undefined, '正在准备导入内置内核…');
+      }
+    } else if (kernelImporting) {
+      // 导入已结束但完成事件错失（窗口就绪太晚）：清理导入态
+      kernelImporting = false;
+      els.btnStart.disabled = false;
+      hideKernelImport();
+    }
     applyDshState(s.dsh);
   } catch {
     setStatus('状态获取失败', 'red');
@@ -244,7 +285,7 @@ async function handleStart() {
     if (res && res.ok === false && res.reason === 'kernel-not-installed') {
       showStage('failed'); els.stageFailedText.textContent = '内核未安装，请到设置中安装内核。';
     } else if (res && res.ok === false && res.reason === 'kernel-updating') {
-      showToast('error', '内核更新中，完成后即可启动 dsh。', 5000);
+      showToast('error', '内核处理中（更新/导入），完成后即可启动 dsh。', 5000);
       refreshStatus();
     }
   } catch (err) {
@@ -717,9 +758,35 @@ function bindEvents() {
     setKernelUpdating(false);
   });
 
-  api.onKernelImportProgress((m) => { showStage('loading'); setStageLoading(m); });
-  api.onKernelImportDone((info) => { setStatus('内核就绪，点击启动', 'yellow'); showToast('ok', '内置内核 v' + (info.version || '?') + ' 导入完成'); refreshStatus(); });
-  api.onKernelImportError((m) => showToast('error', '内置内核导入失败：' + m));
+  api.onKernelImportProgress((m) => {
+    // 导入/对齐期间：禁用启动按钮，显示全屏进度条；阻止轮询重置为空态
+    kernelImporting = true;
+    els.btnStart.disabled = true;
+    showStage('loading');
+    if (m && typeof m === 'object' && !Array.isArray(m)) {
+      setKernelImport(m.percent, m.message);
+    } else {
+      setKernelImport(undefined, m);
+    }
+  });
+  api.onKernelImportDone((info) => {
+    kernelImporting = false;
+    els.btnStart.disabled = false;
+    hideKernelImport();
+    setStatus('内核就绪，点击启动', 'yellow');
+    // skipped=true 表示"已安装同版本内核，无需导入"（仅提示一条中性文案）
+    if (!(info && info.skipped)) {
+      showToast('ok', '内置内核 v' + (info.version || '?') + ' 导入完成');
+    }
+    refreshStatus();
+  });
+  api.onKernelImportError((m) => {
+    kernelImporting = false;
+    els.btnStart.disabled = false;
+    hideKernelImport();
+    showToast('error', '内置内核导入失败：' + m);
+    refreshStatus();
+  });
 
   // 程序自动更新事件（electron-updater）
   api.onAppUpdateEvent((event, payload) => {
