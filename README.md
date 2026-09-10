@@ -49,6 +49,9 @@
   覆盖升级时安装程序会替换 Electron 运行组件（如 `d3dcompiler_47.dll`），属正常现象，选择允许/信任即可。
 - **检查更新提示 404？**
   请确认「设置 → 程序更新」中的 GitHub 仓库填写为 `owner/repo` 格式，且对应仓库已发布 Release。
+- **更新内核后工作台提示 `dsh web authentication required; reopen the URL printed by dsh web.`？**
+  新版内核为 Web UI 增加了 browser-auth：访问必须使用启动时打印的**带 token URL** 兑换签名 cookie，
+  直接访问裸地址会被 401 拒绝。客户端已自动接管该流程（捕获并加载认证 URL），请升级客户端到最新版本。
 
 ## 📄 许可证
 

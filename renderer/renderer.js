@@ -86,6 +86,8 @@ let wsReady = false;      // webview 页面加载完成
 let dshReady = false;     // 端口探活成功（dsh 服务真正就绪）
 let webviewVerifyTimer = null; // webview "完全加载" 校验轮询定时器
 let lastDshPort = 3080;
+// dsh 打印的根 URL：新内核携带认证 token（browser-auth 必需），旧内核为裸地址
+let lastDshAuthUrl = null;
 // 内核更新（安装）操作锁：安装中禁用更新按钮与 dsh 启动按钮，防止重复点击/文件占用
 let updateBusy = false;
 // 检查更新锁：仅禁用检查/安装按钮，不影响 dsh 启动
@@ -165,7 +167,11 @@ function loadWsUrl() {
   if (!els.dshWebview) return;
   wsReady = false;
   clearTimeout(webviewVerifyTimer);
-  els.dshWebview.src = 'http://127.0.0.1:' + lastDshPort;
+  // 新内核启用 browser-auth：必须加载 dsh 打印的带 token URL，
+  // 由服务端铸造签名 cookie 后重定向到干净根页面；直接访问裸地址会被 401 拒绝
+  //（"dsh web authentication required; reopen the URL printed by dsh web."）。
+  // 旧内核的 authUrl 即裸地址，行为与之前一致。
+  els.dshWebview.src = lastDshAuthUrl || ('http://127.0.0.1:' + lastDshPort);
 }
 
 function applyDshState(dsh) {
@@ -175,6 +181,8 @@ function applyDshState(dsh) {
   els.btnStop.disabled = !running;
   if (running) {
     lastDshPort = dsh.port || lastDshPort;
+    // 新内核：采用 dsh 打印的带 token URL（webview 需用它兑换签名 cookie）
+    if (dsh.authUrl) lastDshAuthUrl = dsh.authUrl;
     els.statusExtra.textContent = 'PID ' + (dsh.pid || '') + ' · 端口 ' + lastDshPort;
     // 就绪状态以主进程端口探活结果（dsh.ready）为准：
     // macOS 关窗后应用驻留后台、dsh 继续运行，重开窗口时新的渲染层
@@ -202,6 +210,8 @@ function applyDshState(dsh) {
     els.statusExtra.textContent = '';
     wsReady = false;
     dshReady = false;
+    // 进程已退出，携带的进程 token 失效，重新启动后由新 URL 覆盖
+    lastDshAuthUrl = null;
     clearTimeout(webviewVerifyTimer);
     showStage('empty');
   }
@@ -714,6 +724,7 @@ function bindEvents() {
   // 端口探活成功（服务就绪）后才加载 webview → 期间一直显示"启动中"，避免黑屏
   api.onDshReady((info) => {
     dshReady = true;
+    if (info && info.authUrl) lastDshAuthUrl = info.authUrl;
     setStatus('dsh 运行中', 'green'); els.statusExtra.textContent = '端口 ' + (info && info.port);
     // 若状态推送已抢先加载过工作台，避免重复加载
     if (wsReady) return;

@@ -39,6 +39,17 @@ class DshHost {
     this.ready = false;
     /** dsh 自身输出的最近 stderr 缓冲（用于异常退出诊断） */
     this._stderrBuf = [];
+    /**
+     * dsh web 打印的根 URL（`dsh web:` 行）。
+     * 新内核启用 browser-auth：该 URL 携带进程 token（`?token=...`），
+     * 客户端必须用它加载 webview 换取签名 cookie，否则被 401 拒绝。
+     * 旧内核该行是裸 URL，同样兼容。
+     */
+    this.authUrl = null;
+    /** stdout 尾部缓冲：跨 chunk 拼接后解析 `dsh web:` 行（避免分片截断） */
+    this._stdoutTail = '';
+    /** 内核是否启用 browser-auth 的探测结果缓存（内核更新后重置） */
+    this._authCapability = undefined;
     /** 日志回调：{ onLog?: (line: string) => void, onExit?: (code: number|null) => void } */
     this.events = {};
   }
@@ -88,6 +99,69 @@ class DshHost {
   }
 
   /**
+   * 当前内核的 web 是否启用 browser-auth（必须携带 token 的 URL 才能访问）。
+   * 新内核由 dsh-client-connection 实现 `authenticatedUrl()` 引入该机制；
+   * 旧内核无此实现，裸 URL 即可访问（保持原有行为）。
+   * @returns {boolean}
+   */
+  _needsAuthUrl() {
+    if (this._authCapability !== undefined) return this._authCapability;
+    try {
+      const file = path.join(
+        this.kernelDir,
+        'node_modules',
+        '@deepseek-ai',
+        'dsh-client-connection',
+        'lib',
+        'index.js'
+      );
+      const src = fs.readFileSync(file, 'utf8');
+      this._authCapability = src.includes('authenticatedUrl');
+    } catch {
+      this._authCapability = false;
+    }
+    return this._authCapability;
+  }
+
+  /**
+   * 从 dsh stdout 中捕获 `dsh web:` 打印的根 URL。
+   * 新内核该行形如 `dsh web: http://127.0.0.1:3080/?token=<进程token>`，
+   * 访问它会让服务端铸造签名 cookie 并重定向到干净的 `/`；
+   * 未携带 token 的裸地址会被 401 拒绝并提示
+   * "dsh web authentication required; reopen the URL printed by dsh web."。
+   * 绑定非回环地址时该行尾部还会附 ` (LAN: http://...)`，此处只取回环主 URL。
+   * @param {string} text stdout 文本（含尾部缓冲）
+   */
+  _captureWebUrl(text) {
+    if (this.authUrl) return; // 每个进程生命周期内只取第一条
+    const m = text.match(/dsh web:\s*(https?:\/\/\S+)/);
+    if (!m) return;
+    const url = m[1].replace(/[)\]},;]+$/, '');
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return;
+    }
+    if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost') return;
+    this.authUrl = url;
+    this.logger.info(
+      `已获取 dsh Web URL（端口 ${parsed.port}${url.includes('token=') ? '，含认证 token' : ''}）`
+    );
+    this.events.onWebUrl?.(url);
+  }
+
+  /**
+   * 日志脱敏：隐藏 `dsh web:` URL 中的进程 token，
+   * 避免该凭据进入日志面板/日志文件被截图或转发泄露。
+   * @param {string} line
+   * @returns {string}
+   */
+  static _redactWebToken(line) {
+    return line.replace(/([?&]token=)[^&\s)]+/gi, '$1***');
+  }
+
+  /**
    * 启动 dsh 进程
    * @param {object} [options]
    * @param {string} [options.mode='web'] 运行模式：web / tui / headless
@@ -103,6 +177,10 @@ class DshHost {
     // 每次启动重新解析端口，避免残留上次会话的 resolvedPort
     this.resolvedPort = null;
     this.ready = false;
+    this.authUrl = null;
+    this._stdoutTail = '';
+    // 内核可能刚被更新（browser-auth 支持情况随之变化），重新探测
+    this._authCapability = undefined;
 
     const portNum = port || this.port;
     const binPath = this.dshBinPath;
@@ -186,10 +264,15 @@ class DshHost {
     this.events.onStateChange?.(this.status);
 
     this.child.stdout.on('data', (d) => {
-      const lines = d.toString().split(/\r?\n/).filter(Boolean);
-      for (const line of lines) {
-        this.logger.info(line);
-        this.events.onLog?.(line);
+      const text = d.toString();
+      // 跨 chunk 拼接后再解析 `dsh web:` URL 行（该行可能被 stdout 分片截断）
+      this._stdoutTail = (this._stdoutTail + text).slice(-4000);
+      this._captureWebUrl(this._stdoutTail);
+      // 输出到日志/UI 前脱敏 token，避免进程凭据泄露
+      for (const line of text.split(/\r?\n/).filter(Boolean)) {
+        const safe = DshHost._redactWebToken(line);
+        this.logger.info(safe);
+        this.events.onLog?.(safe);
       }
     });
 
@@ -217,6 +300,7 @@ class DshHost {
       this.ready = false;
       this.child = null;
       this.resolvedPort = null;
+      this.authUrl = null;
       this.events.onExit?.(code);
       this.events.onStateChange?.(this.status);
       // 诊断：非主动停止的意外退出，把 dsh 自身 stderr 报错附带到 reason，便于用户定位
@@ -257,11 +341,16 @@ class DshHost {
         });
         // 端口有响应 + 我们启动的 dsh 进程仍存活，才算真正就绪
         // （防止残留进程占用端口时误判；残留进程会在 start 预检时被清理）
-        if (res.status >= 200 && res.status < 500 && this.running && this.child && this.child.exitCode === null) {
+        const alive = this.running && this.child && this.child.exitCode === null;
+        if (res.status >= 200 && res.status < 500 && alive) {
+          // 新内核启用 browser-auth：必须等 `dsh web:` 行打印出带 token 的 URL，
+          // 客户端才能用其换取签名 cookie（裸地址会被 401 拒绝）。
+          // 尚未拿到时继续探测，待该行出现后由后续轮询发布就绪。
+          if (this._needsAuthUrl() && !this.authUrl) return;
           clearInterval(probeTimer);
           this.logger.info(`dsh Web UI 就绪（端口 ${port}）`);
           this.ready = true;
-          this.events.onReady?.(port);
+          this.events.onReady?.(port, this.authUrl);
         }
       } catch {
         // 端口未就绪，继续探测
@@ -282,6 +371,7 @@ class DshHost {
       this.ready = false;
       this.stopping = false;
       this.resolvedPort = null;
+      this.authUrl = null;
       return Promise.resolve({ ok: true, alreadyStopped: true });
     }
     this.stopping = true;
@@ -294,6 +384,7 @@ class DshHost {
         this.child = null;
         this.stopping = false;
         this.resolvedPort = null;
+        this.authUrl = null;
         resolve({ ok: true });
       };
 
@@ -447,6 +538,8 @@ class DshHost {
       ready: this.ready,
       pid: this.child ? this.child.pid : null,
       port: this.port,
+      // dsh 打印的根 URL（新内核含认证 token，供 webview 兑换 cookie；旧内核为裸地址）
+      authUrl: this.authUrl,
       dshHome: this.dshHome,
     };
   }

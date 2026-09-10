@@ -82,9 +82,11 @@ function bootstrap() {
   dshHost.events.onLog = (line) => pushLog('', line);
   // dsh 进程状态变化（启动/就绪/退出）实时推送渲染层
   dshHost.events.onStateChange = (status) => notifyRenderer('dsh:state', status);
-  dshHost.events.onReady = (port) => {
+  dshHost.events.onReady = (port, authUrl) => {
     pushLog('[dsh]', `dsh Web UI 已就绪（端口 ${port}）`);
-    notifyRenderer('dsh:ready', { port });
+    // authUrl：新内核为带 token 的根 URL，渲染层必须用它加载 webview
+    //（否则裸地址被 browser-auth 以 401 拒绝）；旧内核为裸地址
+    notifyRenderer('dsh:ready', { port, authUrl: authUrl || null });
   };
   // dsh 意外退出自动重启（时间窗口限频：60s 内最多 3 次，之后停止并提示）
   // 避免 dsh 崩溃→重启→再崩溃的无限循环（旧版 restartCount 在 onReady 重置会导致死循环）
