@@ -9,7 +9,7 @@
 | `main.js` | 主进程入口。创建窗口、注册全部 IPC、编排自动更新（启动检查 + 定时轮询）、首启导入内置内核、单实例锁、退出清理 |
 | `kernel-manager.js` | **内核管理**。本地版本读取、npm registry 版本检查（latest/stable）、Node 环境检测、内核安装（临时目录安装 → 校验 → 备份 → 原子替换）、回滚、内置内核导入（`getBundledKernelInfo` / `importBundledKernel`） |
 | `dsh-host.js` | **dsh 进程托管**。用系统 Node 启动 `dsh web`（设置 `DSH_HOME` 隔离数据）、停止/重启、日志实时回调；**捕获 `dsh web:` 打印的根 URL**（新内核携带进程 token，供 webview 兑换签名 cookie，见下）并作为就绪条件 |
-| `app-updater.js` | **客户端自身程序自动更新**。基于 electron-updater，指向 GitHub Releases，检查/自动下载/安装重启；仅在打包环境启用 |
+| `app-updater.js` | **客户端自身程序自动更新**。基于 electron-updater，指向 GitHub Releases，检查/自动下载；Windows 走官方 `quitAndInstall`，**macOS 为引导式手动更新**（无 Apple 证书时 ShipIt 签名校验必然失败，故把安装包复制到「下载」并打开，由用户拖拽覆盖）；仅在打包环境启用 |
 | `settings.js` | 设置持久化。JSON 文件读写（userData/settings.json），默认值见 `DEFAULTS` |
 
 ## 关键流程

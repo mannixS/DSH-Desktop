@@ -391,11 +391,20 @@ async function handleCheckAppUpdate() {
   finally { els.btnCheckAppUpdate.disabled = false; els.btnCheckAppUpdate.textContent = '检查程序更新'; }
 }
 
-// 安装并重启（新版本已下载完成后）
+// 安装并重启（Windows）；macOS 为引导式手动更新：准备并打开安装包
 async function handleInstallAppUpdate() {
   try {
     const res = await api.installAppUpdate();
-    if (res && res.ok === false) setAppUpdateResult('err', '安装失败：' + (res.error || ''));
+    if (!res) return;
+    if (res.ok === false) { setAppUpdateResult('err', '安装失败：' + (res.error || '')); return; }
+    if (res.manual && res.path) {
+      // macOS：安装包已放入「下载」目录并打开（zip 会被归档工具解压）
+      setAppUpdateResult('ok', '安装包已保存到「下载」并打开：请把 DSH Desktop 拖入「应用程序」覆盖安装。');
+    } else if (res.manual && res.fallbackUrl) {
+      setAppUpdateResult('err', '未能准备本地安装包，已为你打开下载页面，请手动下载并覆盖安装。');
+    } else if (res.downloading) {
+      setAppUpdateResult('', '正在下载新版本，下载完成后请再次点击。');
+    }
   } catch (err) { setAppUpdateResult('err', '安装失败：' + err.message); }
 }
 
@@ -641,6 +650,12 @@ function bindEvents() {
   const isMac = navigator.platform.toLowerCase().includes('mac');
   document.body.setAttribute('data-platform', isMac ? 'mac' : 'win');
 
+  // macOS 无 Apple 开发者证书，自动安装会被 Squirrel ShipIt 的签名校验拒绝，
+  // 因此程序更新在 mac 上采用"引导式手动更新"：准备并打开安装包，由用户拖拽覆盖。
+  if (isMac && els.btnDownloadAppUpdate) {
+    els.btnDownloadAppUpdate.textContent = '下载安装包';
+  }
+
   if (isMac) {
     // mac：保留原生按钮，不绑定自绘窗口控制（避免功能重叠）
     if (els.titlebarControls) els.titlebarControls.style.display = 'none';
@@ -805,7 +820,12 @@ function bindEvents() {
     else if (event === 'available') { setAppUpdateResult('ok', '发现新版本 v' + (payload && payload.version) + '，正在自动下载…'); els.btnDownloadAppUpdate.disabled = true; }
     else if (event === 'not-available') setAppUpdateResult('', '当前已是最新版本。');
     else if (event === 'progress') setAppUpdateResult('', '正在下载更新：' + (payload && payload.percent) + '%');
-    else if (event === 'downloaded') { setAppUpdateResult('ok', '新版本已下载完成，点击「安装并重启」完成升级。'); els.btnDownloadAppUpdate.disabled = false; }
+    else if (event === 'downloaded') {
+      setAppUpdateResult('ok', (payload && payload.manual)
+        ? '新版本已下载完成，点击「下载安装包」，再把 DSH Desktop 拖入「应用程序」覆盖安装。'
+        : '新版本已下载完成，点击「安装并重启」完成升级。');
+      els.btnDownloadAppUpdate.disabled = false;
+    }
     else if (event === 'error') { setAppUpdateResult('err', '更新失败：' + (payload && payload.message)); els.btnDownloadAppUpdate.disabled = true; }
   });
 }

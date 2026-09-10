@@ -15,7 +15,9 @@
  *  downloadAndInstall()-> 触发安装并重启
  */
 
-const { app } = require('electron');
+const { app, shell } = require('electron');
+const path = require('path');
+const fs = require('fs');
 
 class AppUpdater {
   /**
@@ -34,6 +36,9 @@ class AppUpdater {
     this.onEvent = onEvent || (() => {});
     this.initialized = false;
     this.updateDownloaded = false;
+    /** 已下载安装包的落盘路径与版本（macOS 引导式手动更新需要该文件） */
+    this._downloadedFile = null;
+    this._downloadedVersion = null;
     /** 已应用的更新源标识（设置变化时据此重新 setFeedURL） */
     this._feedKey = null;
     /** electron-updater 的 autoUpdater 实例（懒加载） */
@@ -108,8 +113,11 @@ class AppUpdater {
     });
     this._au().on('update-downloaded', (info) => {
       this.updateDownloaded = true;
+      // 记录安装包落盘路径：macOS 引导式手动更新要把该文件交给用户
+      this._downloadedFile = (info && info.downloadedFile) || null;
+      this._downloadedVersion = (info && info.version) || null;
       this.logger.info(`新版本 ${info.version} 已下载完成`);
-      this._emit('downloaded', { version: info.version });
+      this._emit('downloaded', { version: info.version, manual: this.isManualUpdateMode });
     });
 
     this.logger.info('autoUpdater 初始化完成');
@@ -180,10 +188,68 @@ class AppUpdater {
     }
   }
 
+  /**
+   * 是否采用"引导式手动更新"（当前仅 macOS）。
+   *
+   * macOS 的自动安装依赖 Squirrel 的 ShipIt，其代码签名校验
+   * （SecStaticCodeCheckValidity）要求新 app 满足当前 app 的 designated requirement；
+   * 本项目没有 Apple Developer ID 证书，mac 包只能 ad-hoc 签名，其 designated
+   * requirement 退化为内容哈希（cdhash）——新版本内容必然不同，校验注定失败，
+   * 报 "Code signature ... did not pass validation: 代码不含资源，但签名指示这些资源必须存在"。
+   * 因此 macOS 改为把安装包交给用户手动拖拽覆盖（不经过 ShipIt，不做签名校验）。
+   * Windows（NSIS）不校验签名，自动更新不受影响。
+   */
+  get isManualUpdateMode() {
+    return process.platform === 'darwin';
+  }
+
+  /** 本仓库的 Release 页面地址（引导式更新的兜底下载入口） */
+  releasePageUrl() {
+    const { owner, repo } = this._readRepoConfig();
+    if (!owner || !repo) return null;
+    return `https://github.com/${owner}/${repo}/releases/latest`;
+  }
+
+  /**
+   * macOS 引导式手动安装：
+   * 把 electron-updater 已下载的安装包复制到「下载」目录并打开，
+   * 由用户将 DSH Desktop.app 拖入「应用程序」覆盖安装（无需代码签名校验）。
+   * 本地安装包不可用时退回打开 Release 下载页。
+   */
+  _guideMacManualInstall() {
+    if (!this.updateDownloaded) {
+      // 尚未下载完成：触发/继续下载，等 update-downloaded 事件后再点一次
+      if (!this.initialized) this.init();
+      try {
+        this._au().checkForUpdates();
+      } catch {}
+      return { ok: true, downloading: true, manual: true };
+    }
+    try {
+      const src = this._downloadedFile;
+      if (!src || !fs.existsSync(src)) throw new Error('未找到已下载的安装包');
+      const dest = path.join(app.getPath('downloads'), path.basename(src));
+      if (path.resolve(src) !== path.resolve(dest)) fs.copyFileSync(src, dest);
+      // 打开安装包：macOS 会用「归档实用工具」解压 zip，用户即可拖拽覆盖
+      shell.openPath(dest).catch((e) => this.logger.warn('打开安装包失败: ' + e.message));
+      this.logger.info(`macOS 引导式更新：安装包已放入下载目录 ${dest}`);
+      return { ok: true, manual: true, path: dest, version: this._downloadedVersion };
+    } catch (err) {
+      const url = this.releasePageUrl();
+      this.logger.warn(`本地安装包不可用（${err.message}），改为打开下载页${url ? ': ' + url : ''}`);
+      if (url) shell.openExternal(url).catch(() => {});
+      return { ok: true, manual: true, fallbackUrl: url, error: err.message };
+    }
+  }
+
   /** 安装并重启（新版本已下载完成时） */
   downloadAndInstall() {
     if (!app.isPackaged) {
       return { ok: false, error: '开发模式不支持自动更新' };
+    }
+    // macOS：无 Apple 证书时 ShipIt 签名校验必然失败，改走引导式手动更新
+    if (this.isManualUpdateMode) {
+      return this._guideMacManualInstall();
     }
     if (this.updateDownloaded) {
       this._au().quitAndInstall(false, true);
