@@ -2,12 +2,18 @@ name: Build & Release
 
 # 触发方式：
 #   1. 推送 v 前缀 tag（如 v1.0.0）→ 构建双平台并创建 GitHub Release
-#   2. 手动触发（Actions 页面 Run workflow）→ 仅构建并上传 artifact，不创建 Release
+#   2. 手动触发（Actions 页面 Run workflow）→ 仅构建并上传 artifact，不创建 Release；
+#      填写 sync_tag（如 v1.0.29）时仅执行 CNB 补同步，用于补齐历史版本
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      sync_tag:
+        description: '仅补同步到 CNB 的标签（如 v1.0.29）；留空则只做手动构建，不同步'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -109,8 +115,9 @@ jobs:
 
   sync-cnb:
     name: Sync to CNB (cnb.cool)
-    # 等 GitHub Release 就绪后再推送 tag：CNB 流水线需要从 GitHub Release 拉取产物做国内镜像
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 等 GitHub Release 就绪后再推送 tag：CNB 流水线需要从 GitHub Release 拉取产物做国内镜像。
+    # 也支持手动补同步：workflow_dispatch 时填写 sync_tag 即可（无需重新发版）。
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.sync_tag != '')
     needs: release
     runs-on: ubuntu-latest
     steps:
@@ -119,18 +126,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 把 main 与本次 tag 同步到 CNB，触发 CNB 侧 .cnb.yml 的镜像发布流水线。
-      # 未配置 secrets 时自动跳过（不影响 GitHub 侧发布）。
+      # 把 main 与 tag 同步到 CNB，触发 CNB 侧 .cnb.yml 的镜像发布流水线。
+      # 凭据可放在 Repository secrets 或 Repository variables；
+      # 本 job 未声明 environment，因此请勿把凭据配置在 environment 中（那样取不到值）。
+      # 未配置时自动跳过并给出 warning，不影响 GitHub 侧发布。
       - name: Push code and tag to CNB
         env:
-          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
-          CNB_REPO: ${{ secrets.CNB_REPO }}
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN || vars.CNB_TOKEN }}
+          CNB_REPO: ${{ vars.CNB_REPO || secrets.CNB_REPO }}
+          SYNC_TAG: ${{ inputs.sync_tag || github.ref_name }}
         run: |
-          if [ -z "$CNB_TOKEN" ] || [ -z "$CNB_REPO" ]; then
-            echo "未配置 CNB_TOKEN / CNB_REPO，跳过 CNB 同步。"
+          missing=""
+          if [ -z "$CNB_TOKEN" ]; then missing="${missing} CNB_TOKEN"; fi
+          if [ -z "$CNB_REPO" ]; then missing="${missing} CNB_REPO"; fi
+          if [ -n "$missing" ]; then
+            echo "::warning::缺少配置：${missing}"
+            echo "::warning::请在仓库 Settings → Secrets and variables → Actions 中配置："
+            echo "::warning::  - Repository secrets：CNB_TOKEN（CNB 访问令牌，需 repo-contents 读写）"
+            echo "::warning::  - Repository variables 或 secrets：CNB_REPO（如 mannixS/DSH-Desktop）"
+            echo "::warning::注意：不要配置在 environment 中（本 workflow 未声明 environment，取不到值）。"
             exit 0
           fi
+          echo "同步标签：${SYNC_TAG}"
           git remote add cnb "https://cnb:${CNB_TOKEN}@cnb.cool/${CNB_REPO}.git"
           git push cnb "HEAD:refs/heads/main" --force
-          git push cnb "refs/tags/${GITHUB_REF_NAME}" --force
-          echo "已同步到 CNB：${CNB_REPO}@${GITHUB_REF_NAME}"
+          git push cnb "refs/tags/${SYNC_TAG}" --force
+          echo "已同步到 CNB：${CNB_REPO}@${SYNC_TAG}"

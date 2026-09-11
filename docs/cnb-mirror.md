@@ -47,16 +47,28 @@ https://cnb.cool/<owner>/<repo>/-/releases/download/latest/
 
 CNB →「个人设置 → 访问令牌」→ 新建，勾选 **repo-contents 读写** 权限，复制令牌。
 
-### 3. 在 GitHub 配置 Secrets
+### 3. 在 GitHub 配置 Actions 凭据
 
-仓库 →「Settings → Secrets and variables → Actions」新增两个 Secret：
+仓库 →「Settings → Secrets and variables → Actions」新增：
 
-| Secret | 示例值 | 用途 |
-|--------|--------|------|
-| `CNB_TOKEN` | （第 2 步复制的令牌） | 推送代码/标签到 CNB |
-| `CNB_REPO` | `mannixS/DSH-Desktop` | CNB 仓库路径 |
+| 名称 | 推荐位置 | 示例值 | 用途 |
+|------|----------|--------|------|
+| `CNB_TOKEN` | **Repository secrets** | （第 2 步复制的令牌） | 推送代码/标签到 CNB |
+| `CNB_REPO` | **Repository variables** 或 secrets | `mannixS/DSH-Desktop` | CNB 仓库路径 |
 
-未配置这两个 Secret 时，`sync-cnb` 步骤会**自动跳过**，不影响 GitHub 侧发布。
+- 两者放在 **Repository 级别**即可（`sync-cnb` 会同时读取 secrets 与 variables）；
+- `CNB_REPO` 只是仓库路径、并非敏感信息，放 **Variables** 更规范；
+- ⚠️ **不要配置在 environment 中**：本 workflow 未声明 `environment`，配在那里取不到值；
+- 未配置时 `sync-cnb` 会**自动跳过**，并在日志中以 `::warning::` 指出具体缺少哪一项，不影响 GitHub 侧发布。
+
+### 3.1 补同步已发布的历史版本
+
+若某个 tag 发布时凭据尚未配好（CNB 侧缺产物），**无需重新发版**：
+
+1. 打开仓库 Actions → 左侧选「Build & Release」→ 右侧 **Run workflow**；
+2. 分支选 `main`，在 **sync_tag** 输入框填写要补同步的标签（如 `v1.0.29`）；
+3. 运行后只执行 `sync-cnb`（构建与 GitHub Release 步骤会因条件不满足而跳过），
+   把该 tag 推到 CNB，由 CNB 流水线完成国内镜像发布。
 
 ### 4. 推送标签触发发布
 
@@ -87,7 +99,8 @@ CNB 流水线（`.cnb.yml` 的 `tag_push`）拉取产物 → 创建 `v1.0.30` �
 
 | 现象 | 排查方向 |
 |------|----------|
-| CNB 流水线未触发 | `sync-cnb` job 是否成功；`CNB_TOKEN` / `CNB_REPO` 是否配置；CNB 仓库是否存在该 tag |
+| CNB 流水线未触发 | `sync-cnb` job 是否成功；`CNB_TOKEN` / `CNB_REPO` 是否配置（**放 Repository 级别，不要放 environment**）；CNB 仓库是否存在该 tag |
+| 日志提示「缺少配置: CNB_TOKEN / CNB_REPO」 | 按 warning 提示补齐凭据；`CNB_REPO` 放 Variables 亦可（`sync-cnb` 两者都读）；补齐后用 **Run workflow + sync_tag** 补同步，无需重新发版 |
 | 拉取 GitHub 产物失败 | GitHub Release 是否已发布完成；可在 CNB 上重跑流水线；配置 `GITHUB_TOKEN` 避免 API 限流 |
 | 上传附件报「tag 不存在对应 release」 | `cnb-mirror-release.sh` 第 1 步创建 Release 是否成功（检查 CNB_TOKEN 权限） |
 | 客户端仍走 GitHub | 更新源模式是否为「自动」；CNB 仓库路径是否正确；CNB 上是否已生成 `latest` 通道 |
