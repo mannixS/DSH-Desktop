@@ -8,6 +8,8 @@
 | `check-env.js` | `node scripts/check-env.js` | 检测 Node.js / npm 版本与可用性，输出是否满足 dsh 要求（v18+） |
 | `build.js` | `node scripts/build.js` | 语法检查所有 JS 源文件、校验 package.json，并提示打包命令 |
 | `_verify.test.js` | `node scripts/_verify.test.js` | 核心逻辑回归验证（semver、内核信息、环境检测、远端检查、内置内核导入、程序更新版本比较），共 26 项断言 |
+| `cnb-mirror-release.sh` | `bash scripts/cnb-mirror-release.sh <tag>` | **CNB 国内镜像发布**：在 CNB 流水线中运行——创建 CNB Release（版本化 + `latest` 通道）、从 GitHub Release 拉取双平台产物、生成 latest 通道清单 |
+| `cnb-rewrite-manifest.js` | `node scripts/cnb-rewrite-manifest.js <tag> <distDir> <slug>` | 把 `latest.yml` / `latest-mac.yml` 中的 `url` 改写为指向版本化 Release 的绝对地址，使 `latest` 通道只需存放两个小清单 |
 
 ## 打包前置
 

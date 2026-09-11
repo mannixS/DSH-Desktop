@@ -32,6 +32,7 @@ const els = {
   setAutoStartDsh: $('#set-auto-start-dsh'), setDshPort: $('#set-dsh-port'), setTheme: $('#set-theme'),
   nodeVersion: $('#node-version'), npmVersion: $('#npm-version'), btnOpenNodeDownload: $('#btn-open-node-download'),
   setAppUpdateRepo: $('#set-app-update-repo'), setAppUpdateUrl: $('#set-app-update-url'),
+  setAppUpdateSource: $('#set-app-update-source'), setAppUpdateCnbRepo: $('#set-app-update-cnb-repo'),
   setAppAutoCheck: $('#set-app-auto-check'), btnCheckAppUpdate: $('#btn-check-app-update'),
   btnDownloadAppUpdate: $('#btn-download-app-update'), appUpdateResult: $('#app-update-result'),
   btnRemoveKernel: $('#btn-remove-kernel'),
@@ -276,6 +277,8 @@ function applySettingsToForm() {
   const rep = currentSettings.appUpdateRepo || 'DSH-Desktop';
   els.setAppUpdateRepo.value = rep.includes('/') ? rep : `${own}/${rep}`;
   els.setAppUpdateUrl.value = currentSettings.appUpdateUrl || '';
+  els.setAppUpdateSource.value = currentSettings.appUpdateSourceMode || 'auto';
+  els.setAppUpdateCnbRepo.value = currentSettings.appUpdateCnbRepo || '';
   els.setAppAutoCheck.checked = !!currentSettings.appAutoCheckUpdate;
 }
 
@@ -378,6 +381,15 @@ function setAppUpdateResult(t, text) {
   els.appUpdateResult.textContent = text;
 }
 
+/** 更新源提示：展示本次实际选用的源与各源测速耗时（多源时） */
+function sourceHint(info) {
+  const src = info && info.source;
+  if (!src) return '';
+  const lat = (info.sourceLatency || []).filter((x) => x && x.ms != null);
+  const detail = lat.length > 1 ? '（' + lat.map((x) => x.label + ' ' + x.ms + 'ms').join('，') + '）' : '';
+  return '\n更新源：' + src.label + detail;
+}
+
 async function handleCheckAppUpdate() {
   els.btnCheckAppUpdate.disabled = true; els.btnCheckAppUpdate.textContent = '检查中…';
   try {
@@ -385,8 +397,8 @@ async function handleCheckAppUpdate() {
     lastAppUpdateInfo = info;
     if (!info.configured) setAppUpdateResult('', '未配置更新源，请填写 GitHub 仓库并保存。');
     else if (info.error) setAppUpdateResult('err', '检查失败：' + info.error);
-    else if (info.updateAvailable) setAppUpdateResult('ok', '发现新版本 v' + info.latest + '，正在自动下载…');
-    else setAppUpdateResult('', '当前已是最新版本（v' + info.current + '）。');
+    else if (info.updateAvailable) setAppUpdateResult('ok', '发现新版本 v' + info.latest + '，正在自动下载…' + sourceHint(info));
+    else setAppUpdateResult('', '当前已是最新版本（v' + info.current + '）。' + sourceHint(info));
   } catch (err) { setAppUpdateResult('err', '检查失败：' + err.message); }
   finally { els.btnCheckAppUpdate.disabled = false; els.btnCheckAppUpdate.textContent = '检查程序更新'; }
 }
@@ -430,6 +442,8 @@ async function handleSaveSettings() {
     themeMode: els.setTheme.value,
     appUpdateOwner, appUpdateRepo,
     appUpdateUrl: els.setAppUpdateUrl.value.trim(),
+    appUpdateSourceMode: els.setAppUpdateSource.value,
+    appUpdateCnbRepo: els.setAppUpdateCnbRepo.value.trim(),
     appAutoCheckUpdate: els.setAppAutoCheck.checked,
   };
   try {

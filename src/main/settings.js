@@ -40,6 +40,10 @@ const DEFAULTS = {
   appUpdateRepo: 'DSH-Desktop',
   // 自定义 JSON 更新源（可选，覆盖 GitHub 源）
   appUpdateUrl: '',
+  // 程序更新源模式：'auto'（自动测速选最快）/ 'github' / 'cnb'（cnb.cool 国内镜像）/ 'custom'
+  appUpdateSourceMode: 'auto',
+  // CNB（cnb.cool）国内镜像仓库（owner/repo；留空则与 GitHub 仓库相同）
+  appUpdateCnbRepo: '',
   // 是否自动检查程序更新（启动后延时检查）
   appAutoCheckUpdate: true,
 };

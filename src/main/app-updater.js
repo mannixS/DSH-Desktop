@@ -39,8 +39,10 @@ class AppUpdater {
     /** 已下载安装包的落盘路径与版本（macOS 引导式手动更新需要该文件） */
     this._downloadedFile = null;
     this._downloadedVersion = null;
-    /** 已应用的更新源标识（设置变化时据此重新 setFeedURL） */
-    this._feedKey = null;
+    /** 当前生效的更新源（{ key, label }） */
+    this._activeSource = null;
+    /** 最近一次更新源测速结果（供 UI 展示） */
+    this._sourceLatency = [];
     /** electron-updater 的 autoUpdater 实例（懒加载） */
     this._autoUpdater = null;
   }
@@ -64,11 +66,9 @@ class AppUpdater {
     return app.getVersion();
   }
 
-  /** 更新源是否已配置（GitHub owner/repo，带默认兜底） */
+  /** 更新源是否已配置（GitHub 仓库 / CNB 镜像 / 自定义 URL 任一可用即可） */
   isConfigured() {
-    const owner = (this.settings.get('appUpdateOwner') || 'mannixS').trim();
-    const repo = (this.settings.get('appUpdateRepo') || 'DSH-Desktop').trim();
-    return !!(owner && repo);
+    return this._buildSources().length > 0;
   }
 
   /**
@@ -84,8 +84,6 @@ class AppUpdater {
       this.logger.info('开发模式，跳过程序自动更新初始化。');
       return;
     }
-
-    this._syncFeed();
 
     // 事件订阅
     this._au().on('checking-for-update', () => {
@@ -141,23 +139,107 @@ class AppUpdater {
     return { owner, repo };
   }
 
+  /** 确保 URL 以 / 结尾（generic provider 按目录拼接清单文件名，缺尾斜杠会截掉末段） */
+  static _dirUrl(url) {
+    return url.endsWith('/') ? url : url + '/';
+  }
+
   /**
-   * 根据当前设置应用更新源；设置发生变化时重新 setFeedURL，
-   * 用户在设置中修改 GitHub 仓库 / 自定义 URL 后无需重启应用即生效。
+   * 构建候选更新源：
+   * - `github`：GitHub Releases（electron-updater 的 github provider）
+   * - `cnb`   ：cnb.cool 国内镜像的 Release 公开直链（generic provider，国内下载快）
+   * - `custom`：用户在设置中填写的自定义地址（generic provider）
+   * 每个源都带 `base`（清单文件所在目录），供测速与清单比对复用。
+   * @returns {Array<{key: string, label: string, feed: object, base: string}>}
    */
-  _syncFeed() {
+  _buildSources() {
     const { owner, repo } = this._readRepoConfig();
     const customUrl = (this.settings.get('appUpdateUrl') || '').trim();
-    const key = customUrl ? `generic:${customUrl}` : `github:${owner}/${repo}`;
-    if (this._feedKey === key) return;
+    const cnbRepo =
+      (this.settings.get('appUpdateCnbRepo') || '').trim() ||
+      (owner && repo ? `${owner}/${repo}` : '');
+    const list = [];
     if (customUrl) {
-      this._au().setFeedURL({ provider: 'generic', url: customUrl });
-      this.logger.info(`更新源已切换: ${customUrl}`);
-    } else {
-      this._au().setFeedURL({ provider: 'github', owner, repo });
-      this.logger.info(`更新源已切换: GitHub ${owner}/${repo}`);
+      const base = AppUpdater._dirUrl(customUrl);
+      list.push({ key: 'custom', label: '自定义源', feed: { provider: 'generic', url: base }, base });
     }
-    this._feedKey = key;
+    if (owner && repo) {
+      list.push({
+        key: 'github',
+        label: 'GitHub',
+        feed: { provider: 'github', owner, repo },
+        base: `https://github.com/${owner}/${repo}/releases/latest/download/`,
+      });
+    }
+    if (cnbRepo.includes('/')) {
+      const base = `https://cnb.cool/${cnbRepo}/-/releases/download/latest/`;
+      list.push({ key: 'cnb', label: 'CNB 国内镜像', feed: { provider: 'generic', url: base }, base });
+    }
+    return list;
+  }
+
+  /** 按当前模式筛选候选源；auto 返回全部（交由测速决定），模式无匹配时回退全部 */
+  _candidateSources() {
+    const all = this._buildSources();
+    const mode = this.settings.get('appUpdateSourceMode') || 'auto';
+    if (mode === 'auto') return all;
+    const picked = all.filter((s) => s.key === mode);
+    return picked.length ? picked : all;
+  }
+
+  /** 当前平台对应的更新清单文件名 */
+  _manifestName() {
+    return process.platform === 'darwin' ? 'latest-mac.yml' : 'latest.yml';
+  }
+
+  /**
+   * 选择更新源：`auto` 模式下并发探测各源清单文件的响应时间，
+   * 选用「可用且最快」的源（国内网络下通常命中 CNB 镜像）；
+   * 指定模式则直接返回该源。全部不可探测时回退首选源，由 electron-updater 报出具体错误。
+   * @returns {Promise<object|null>}
+   */
+  async _resolveSource() {
+    const list = this._candidateSources();
+    if (!list.length) return null;
+    if (list.length === 1) {
+      this._sourceLatency = [{ key: list[0].key, label: list[0].label, ms: null }];
+      return list[0];
+    }
+    const manifest = this._manifestName();
+    const probe = async (source) => {
+      const started = Date.now();
+      try {
+        const res = await fetch(source.base + manifest, {
+          method: 'GET',
+          signal: AbortSignal.timeout(6000),
+        });
+        if (!res.ok) return null;
+        await res.arrayBuffer();
+        return { source, ms: Date.now() - started };
+      } catch {
+        return null;
+      }
+    };
+    const results = (await Promise.all(list.map(probe)))
+      .filter(Boolean)
+      .sort((a, b) => a.ms - b.ms);
+    this._sourceLatency = results.map((r) => ({ key: r.source.key, label: r.source.label, ms: r.ms }));
+    if (!results.length) {
+      this.logger.warn('所有更新源均探测失败，回退首选源');
+      return list[0];
+    }
+    this.logger.info(
+      `更新源测速：${results.map((r) => `${r.source.label} ${r.ms}ms`).join('，')} → 选用 ${results[0].source.label}`
+    );
+    return results[0].source;
+  }
+
+  /** 应用更新源（setFeedURL）；每次检查都重设，确保用户在设置中的改动即时生效 */
+  _applySource(source) {
+    if (!source) return;
+    this._au().setFeedURL(source.feed);
+    this._activeSource = { key: source.key, label: source.label };
+    this.logger.info(`更新源: ${source.label}`);
   }
 
   /** 检查更新（有新版本则自动下载） */
@@ -170,8 +252,8 @@ class AppUpdater {
       return { configured: false, current: this.currentVersion };
     }
     try {
-      // 每次检查前同步更新源（用户可能刚在设置中修改了 GitHub 仓库 / 自定义 URL）
-      this._syncFeed();
+      // 选择更新源：auto 模式会并发探测各源清单响应时间，优先国内快速源
+      this._applySource(await this._resolveSource());
       // await checkForUpdates：electron-updater 的 checkForUpdates() 返回 Promise，
       // 不 await 会导致 UI 一直停留在"检查中"（事件可能已错过）
       const result = await this._au().checkForUpdates();
@@ -181,6 +263,8 @@ class AppUpdater {
         current: this.currentVersion,
         latest: info ? info.version : null,
         updateAvailable: !!(info && info.version !== this.currentVersion),
+        source: this._activeSource,
+        sourceLatency: this._sourceLatency || [],
       };
     } catch (err) {
       this.logger.error('检查更新失败: ' + err.message);
@@ -243,9 +327,17 @@ class AppUpdater {
   }
 
   /** 安装并重启（新版本已下载完成时） */
-  downloadAndInstall() {
+  async downloadAndInstall() {
     if (!app.isPackaged) {
       return { ok: false, error: '开发模式不支持自动更新' };
+    }
+    // 用户可能未先"检查更新"就直接点击安装：先解析并应用更新源
+    if (!this._activeSource) {
+      try {
+        this._applySource(await this._resolveSource());
+      } catch (err) {
+        this.logger.warn('解析更新源失败: ' + err.message);
+      }
     }
     // macOS：无 Apple 证书时 ShipIt 签名校验必然失败，改走引导式手动更新
     if (this.isManualUpdateMode) {

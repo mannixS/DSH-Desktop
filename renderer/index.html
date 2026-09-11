@@ -183,8 +183,21 @@
           <input type="text" class="input-text" id="set-app-update-repo" placeholder="owner/repo">
         </div>
         <div class="setting-row">
-          <div><label class="setting-label">自定义更新源 URL（可选）</label><p class="muted">JSON：{ version, notes, assets }</p></div>
-          <input type="text" class="input-text" id="set-app-update-url" placeholder="https://example.com/update.json">
+          <div><label class="setting-label">程序更新源</label><p class="muted">自动：并发测速，选用最快可用源（国内通常命中 CNB 镜像）</p></div>
+          <select class="input-select" id="set-app-update-source">
+            <option value="auto">自动（测速优选）</option>
+            <option value="cnb">CNB 国内镜像（cnb.cool）</option>
+            <option value="github">仅 GitHub</option>
+            <option value="custom">仅自定义 URL</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <div><label class="setting-label">CNB 镜像仓库（owner/repo）</label><p class="muted">cnb.cool 上的仓库，留空则与 GitHub 仓库相同</p></div>
+          <input type="text" class="input-text" id="set-app-update-cnb-repo" placeholder="owner/repo">
+        </div>
+        <div class="setting-row">
+          <div><label class="setting-label">自定义更新源 URL（可选）</label><p class="muted">electron-builder 清单所在目录（目录下含 latest.yml / latest-mac.yml）</p></div>
+          <input type="text" class="input-text" id="set-app-update-url" placeholder="https://example.com/updates/">
         </div>
         <div class="setting-row">
           <div><label class="setting-label">启动后自动检查程序更新</label></div>

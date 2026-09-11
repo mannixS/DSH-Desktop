@@ -106,3 +106,31 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sync-cnb:
+    name: Sync to CNB (cnb.cool)
+    # 等 GitHub Release 就绪后再推送 tag：CNB 流水线需要从 GitHub Release 拉取产物做国内镜像
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 把 main 与本次 tag 同步到 CNB，触发 CNB 侧 .cnb.yml 的镜像发布流水线。
+      # 未配置 secrets 时自动跳过（不影响 GitHub 侧发布）。
+      - name: Push code and tag to CNB
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          CNB_REPO: ${{ secrets.CNB_REPO }}
+        run: |
+          if [ -z "$CNB_TOKEN" ] || [ -z "$CNB_REPO" ]; then
+            echo "未配置 CNB_TOKEN / CNB_REPO，跳过 CNB 同步。"
+            exit 0
+          fi
+          git remote add cnb "https://cnb:${CNB_TOKEN}@cnb.cool/${CNB_REPO}.git"
+          git push cnb "HEAD:refs/heads/main" --force
+          git push cnb "refs/tags/${GITHUB_REF_NAME}" --force
+          echo "已同步到 CNB：${CNB_REPO}@${GITHUB_REF_NAME}"

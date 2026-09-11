@@ -13,6 +13,7 @@
 - 🎨 **主题跟随**：客户端外观自动跟随 dsh 的深/浅色切换，也可在设置中固定深色、浅色或跟随系统
 - 🔄 **内核管理**：一键检查、更新、回滚 dsh 内核；支持 latest（含 RC）/ stable（仅正式版）双通道与定时自动检查
 - ⬆️ **程序自更新**：检测到新版本自动下载；Windows 点「安装并重启」即可升级，macOS 为引导式手动更新（详见常见问题）
+- 🇨🇳 **国内加速更新源**：支持 **CNB 镜像（cnb.cool）**，与 GitHub 双源并发测速择优；国内网络无需代理即可快速检查与下载
 - 📊 **实时状态**：底部状态栏随时显示服务运行状态、进程 PID 与端口；启动 / 停止 / 重启一键操作
 - 📜 **运行日志**：客户端与 dsh 的完整输出实时滚动展示，支持一键复制，方便排查问题
 - 🧹 **退出不残留**：关闭客户端时自动结束 dsh 及其全部子进程，不占用端口、不留后台进程
@@ -27,6 +28,12 @@
 | macOS Apple Silicon | `DSH-Desktop-<版本>-mac-arm64.dmg` | 双击直接安装（推荐） |
 | macOS Apple Silicon（解压版） | `DSH-Desktop-<版本>-mac-arm64.zip` | 解压后拖入「应用程序」 |
 | macOS Intel | `DSH-Desktop-<版本>-mac-x64.zip` | 解压后拖入「应用程序」 |
+
+**国内用户**可改用 CNB 镜像（cnb.cool）下载，速度更快且无需代理：
+
+```
+https://cnb.cool/mannixS/DSH-Desktop/-/releases
+```
 
 > **macOS 首次打开提示「已损坏/无法验证开发者」？**
 > 应用未做 Apple 签名公证，属 Gatekeeper 正常拦截，并非文件损坏。在终端执行：
@@ -49,6 +56,10 @@
   覆盖升级时安装程序会替换 Electron 运行组件（如 `d3dcompiler_47.dll`），属正常现象，选择允许/信任即可。
 - **检查更新提示 404？**
   请确认「设置 → 程序更新」中的 GitHub 仓库填写为 `owner/repo` 格式，且对应仓库已发布 Release。
+- **国内检查更新慢或超时？**
+  「设置 → 程序更新 → 程序更新源」默认为**自动（测速优选）**：客户端会并发探测 GitHub 与
+  CNB 镜像的清单响应时间并选用最快可用的一方，国内网络通常自动命中 CNB 镜像（cnb.cool），
+  无需代理；也可手动固定为「CNB 国内镜像」。详见 [`docs/cnb-mirror.md`](docs/cnb-mirror.md)。
 - **更新内核后工作台提示 `dsh web authentication required; reopen the URL printed by dsh web.`？**
   新版内核为 Web UI 增加了 browser-auth：访问必须使用启动时打印的**带 token URL** 兑换签名 cookie，
   直接访问裸地址会被 401 拒绝。客户端已自动接管该流程（捕获并加载认证 URL），请升级客户端到最新版本。

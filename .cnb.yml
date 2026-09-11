@@ -1,0 +1,42 @@
+# ============================================================================
+# CNB（cnb.cool）流水线：把 GitHub Release 的双平台产物镜像发布到 CNB Release，
+# 作为国内下载通道（客户端「程序更新源」会并发测速并优选 CNB）。
+#
+# 为什么不在 CNB 上构建安装包：
+#   CNB 的构建节点是 Docker 容器（Linux），而本项目的 macOS 安装包必须由 macOS
+#   构建（electron-builder 无法在 Linux 上交叉产出可用的 mac 包）。
+#   为保证 latest.yml / latest-mac.yml 中的 sha512 与实际产物严格一致，
+#   双平台构建统一由 GitHub Actions 完成，CNB 负责「国内发布与分发」。
+#
+# 触发：推送 v* 标签（与 GitHub 侧同一时机，由 GitHub Actions 在 Release 完成后同步过来）
+# 产物：
+#   1) vX.Y.Z 版本化 Release —— 全量安装包（exe / dmg / zip / blockmap / 清单）
+#   2) latest 通道 Release —— 仅两个清单文件（url 已改写为指向版本化 Release 的绝对地址），
+#      供客户端用固定 URL 检查更新：https://cnb.cool/<owner>/<repo>/-/releases/download/latest/latest.yml
+# ============================================================================
+
+$:
+  tag_push:
+    - label:
+        type: RELEASE
+      stages:
+        - name: mirror-and-prepare
+          script: bash scripts/cnb-mirror-release.sh "${CNB_BRANCH}"
+
+        - name: upload-versioned
+          image: cnbcool/attachments:latest
+          settings:
+            attachments:
+              - "./dist/*.exe"
+              - "./dist/*.dmg"
+              - "./dist/*.zip"
+              - "./dist/*.blockmap"
+              - "./dist/latest.yml"
+              - "./dist/latest-mac.yml"
+            tag: "${CNB_BRANCH}"
+
+        - name: upload-latest-channel
+          image: cnbcool/attachments:latest
+          settings:
+            attachments: "./dist/latest-channel/*"
+            tag: "latest"
