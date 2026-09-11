@@ -21,6 +21,8 @@ permissions:
 jobs:
   build:
     name: Build (${{ matrix.name }})
+    # 手动触发且填写 sync_tag 时属于"仅补同步"，跳过构建以免浪费时间
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.sync_tag != '') }}
     strategy:
       fail-fast: false
       matrix:
@@ -117,7 +119,9 @@ jobs:
     name: Sync to CNB (cnb.cool)
     # 等 GitHub Release 就绪后再推送 tag：CNB 流水线需要从 GitHub Release 拉取产物做国内镜像。
     # 也支持手动补同步：workflow_dispatch 时填写 sync_tag 即可（无需重新发版）。
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.sync_tag != '')
+    # 注意：必须用 always() —— 手动触发时 release job 会被跳过（未声明 tag），
+    # 若不加 always()，依赖它的本 job 会被 GitHub 判定为 skipped 而连带跳过。
+    if: always() && ((github.event_name == 'workflow_dispatch' && inputs.sync_tag != '') || (startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success'))
     needs: release
     runs-on: ubuntu-latest
     steps:
